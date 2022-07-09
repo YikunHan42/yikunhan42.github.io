@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<meta http-equiv="X-UA-Compatible" content="IE=edge"><title>用 Rust 做类型体操 (中篇) - Alex Chi</title><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+	<link rel="manifest" href="/site.webmanifest">
+
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta itemprop="name" content="用 Rust 做类型体操 (中篇)">
+<meta itemprop="description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 3: 实现 ArrayImpl 等动态调度类型 在 Day 3-4 中，我们要考虑一件事情：数据库系统在编译期是不可能知道每个从存储、从网络上传过来的 Array 是什么类型的。我们需要给 Array 提供动态分发的功能。
+fn eval_binary(i1: Box&lt;dyn Array&gt; i2: Box&lt;dyn Array&gt;) -&gt; Box&lt;dyn Array&gt; { /* some black magic */ } 说到动态分发，同学们一定会立刻想到用 Box&lt;dyn Array&gt; 来表示 Array 的动态类型。可惜的是，Array trait 在历经 Day 0, 1, 2 的类型体操之后，已经不符合 object safety 了。
+如果一个 trait 可以被包裹成一个动态分发的对象（如 Box&lt;dyn Array&gt;），编译器会给 dyn Array 实现 Array trait。我们看看现在的 Array trait 长啥样：
+/// [`Array`] is a collection of data of the same type."><meta itemprop="datePublished" content="2022-01-24T23:00:00+08:00" />
+<meta itemprop="dateModified" content="2022-01-24T23:00:00+08:00" />
+<meta itemprop="wordCount" content="3576">
+<meta itemprop="keywords" content="Rust,数据库,执行器,类型,GAT," /><meta property="og:title" content="用 Rust 做类型体操 (中篇)" />
+<meta property="og:description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 3: 实现 ArrayImpl 等动态调度类型 在 Day 3-4 中，我们要考虑一件事情：数据库系统在编译期是不可能知道每个从存储、从网络上传过来的 Array 是什么类型的。我们需要给 Array 提供动态分发的功能。
+fn eval_binary(i1: Box&lt;dyn Array&gt; i2: Box&lt;dyn Array&gt;) -&gt; Box&lt;dyn Array&gt; { /* some black magic */ } 说到动态分发，同学们一定会立刻想到用 Box&lt;dyn Array&gt; 来表示 Array 的动态类型。可惜的是，Array trait 在历经 Day 0, 1, 2 的类型体操之后，已经不符合 object safety 了。
+如果一个 trait 可以被包裹成一个动态分发的对象（如 Box&lt;dyn Array&gt;），编译器会给 dyn Array 实现 Array trait。我们看看现在的 Array trait 长啥样：
+/// [`Array`] is a collection of data of the same type." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://www.skyzh.dev/posts/articles/2022-01-24-rust-type-exercise-in-database-executors-middle/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-01-24T23:00:00+08:00" />
+<meta property="article:modified_time" content="2022-01-24T23:00:00+08:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="用 Rust 做类型体操 (中篇)"/>
+<meta name="twitter:description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 3: 实现 ArrayImpl 等动态调度类型 在 Day 3-4 中，我们要考虑一件事情：数据库系统在编译期是不可能知道每个从存储、从网络上传过来的 Array 是什么类型的。我们需要给 Array 提供动态分发的功能。
+fn eval_binary(i1: Box&lt;dyn Array&gt; i2: Box&lt;dyn Array&gt;) -&gt; Box&lt;dyn Array&gt; { /* some black magic */ } 说到动态分发，同学们一定会立刻想到用 Box&lt;dyn Array&gt; 来表示 Array 的动态类型。可惜的是，Array trait 在历经 Day 0, 1, 2 的类型体操之后，已经不符合 object safety 了。
+如果一个 trait 可以被包裹成一个动态分发的对象（如 Box&lt;dyn Array&gt;），编译器会给 dyn Array 实现 Array trait。我们看看现在的 Array trait 长啥样：
+/// [`Array`] is a collection of data of the same type."/>
+<link href='https://fonts.googleapis.com/css?family=Playfair+Display:700' rel='stylesheet' type='text/css'>
+	<link rel="stylesheet" type="text/css" media="screen" href="https://www.skyzh.dev/css/normalize.css" />
+	<link rel="stylesheet" type="text/css" media="screen" href="https://www.skyzh.dev/css/main.css" />
+
+        <link id="dark-scheme" rel="stylesheet" type="text/css" href="https://www.skyzh.dev/css/dark.css" />
+
+	<script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+		<script src="https://www.skyzh.dev/js/main.js"></script>
+	
+</head>
+
+
+
+<body>
+	<div class="container wrapper">
+		<div class="header">
+	
+		<div class="avatar">
+			<a href="https://www.skyzh.dev/">
+				<img src="https://avatars.githubusercontent.com/u/4198311" alt="Alex Chi" />
+			</a>
+		</div>
+	
+	<h1 class="site-title"><a href="https://www.skyzh.dev/">Alex Chi</a></h1>
+	<div class="site-description"><p>Code for fun, Make things happen</p><nav class="nav social">
+			<ul class="flat"><li><a href="https://github.com/skyzh" title="GitHub"><i data-feather="github"></i></a></li></ul>
+		</nav>
+	</div>
+
+	<nav class="nav">
+		<ul class="flat">
+			
+		</ul>
+	</nav>
+</div>
+
+
+		<div class="post">
+			<div class="post-header">
+				
+					
+						<div class="meta">
+							<div class="date">
+								<span class="day">24</span>
+								<span class="rest">Jan 2022</span>
+							</div>
+						</div>
+					
+				
+				<div class="matter">
+					<h1 class="title">用 Rust 做类型体操 (中篇)</h1>
+					
+				</div>
+			</div>
+					
+			<div>
+				
+					<nav id="TableOfContents">
+  <ul>
+    <li><a href="#day-3-实现-arrayimpl-等动态调度类型">Day 3: 实现 <code>ArrayImpl</code> 等动态调度类型</a>
+      <ul>
+        <li><a href="#arrayimpl-的函数签名">ArrayImpl 的函数签名</a></li>
+        <li><a href="#实现-tryfrom-和-into-trait">实现 <code>TryFrom</code> 和 <code>Into</code> trait</a></li>
+        <li><a href="#表达-arrayimpl-引用的-tryfrom-bound">表达 <code>ArrayImpl</code> 引用的 <code>TryFrom</code> bound</a></li>
+      </ul>
+    </li>
+    <li><a href="#day-4-macro-生成-boilerplate-code">Day 4: Macro 生成 boilerplate code</a>
+      <ul>
+        <li><a href="#思考题">思考题</a></li>
+      </ul>
+    </li>
+    <li><a href="#day-5-表达式向量化-上">Day 5: 表达式向量化 (上)</a></li>
+    <li><a href="#day-6-表达式向量化-下">Day 6: 表达式向量化 (下)</a>
+      <ul>
+        <li><a href="#证明泛型标量函数对所有生命周期成立">证明泛型标量函数对所有生命周期成立</a></li>
+        <li><a href="#实现新的标量函数">实现新的标量函数</a></li>
+        <li><a href="#协变与逆变">协变与逆变</a></li>
+        <li><a href="#实现-gat-的生命周期转化">实现 GAT 的生命周期转化</a></li>
+        <li><a href="#重新实现新的标量函数">重新实现新的标量函数</a></li>
+        <li><a href="#实现真正的表达式向量化">实现真正的表达式向量化</a></li>
+        <li><a href="#实现-boxedexpression">实现 BoxedExpression</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+					<hr>
+				
+			</div>
+			<div class="markdown">
+				<p>TL;DR: 本人前两天刚写的 <a href="https://github.com/skyzh/type-exercise-in-rust">type-exercise-in-rust (GitHub)</a> 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。</p>
+<h2 id="day-3-实现-arrayimpl-等动态调度类型">Day 3: 实现 <code>ArrayImpl</code> 等动态调度类型</h2>
+<p>在 Day 3-4 中，我们要考虑一件事情：数据库系统在编译期是不可能知道每个从存储、从网络上传过来的 Array 是什么类型的。我们需要给 Array 提供动态分发的功能。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary(i1: Box&lt;<span style="color:#00f">dyn</span> Array&gt; i2: Box&lt;<span style="color:#00f">dyn</span> Array&gt;) -&gt; Box&lt;<span style="color:#00f">dyn</span> Array&gt; {
+</span></span><span style="display:flex;"><span>  <span style="color:#008000">/* some black magic */</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>说到动态分发，同学们一定会立刻想到用 <code>Box&lt;dyn Array&gt;</code> 来表示 Array 的动态类型。可惜的是，<code>Array</code> trait 在历经 Day 0, 1, 2 的类型体操之后，已经不符合 object safety 了。</p>
+<p>如果一个 trait 可以被包裹成一个动态分发的对象（如 <code>Box&lt;dyn Array&gt;</code>），编译器会给 <code>dyn Array</code> 实现 <code>Array</code> trait。我们看看现在的 <code>Array</code> trait 长啥样：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// [`Array`] is a collection of data of the same type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array <span style="color:#008000">/* 省略一些 bound */</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Retrieve a reference to value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;Self::RefItem&lt;&#39;_&gt;&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Number of items of array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> len(&amp;self) -&gt; <span style="color:#2b91af">usize</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Indicates whether this array is empty
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> is_empty(&amp;self) -&gt; <span style="color:#2b91af">bool</span> {
+</span></span><span style="display:flex;"><span>        self.len() == 0
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Get iterator of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> iter(&amp;self) -&gt; <span style="color:#2b91af">ArrayIterator</span>&lt;Self&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>对于 <code>Int32Array</code>，<code>get</code> 返回 <code>Option&lt;i32&gt;</code> 参数；而对于 <code>StringArray</code>, <code>get</code> 返回 <code>Option&lt;&amp;str&gt;</code> 参数。因此，这个 trait 是不可能给 <code>dyn Array</code> 实现的——根本没有统一的签名能够实现。</p>
+<p>因此，我们考虑使用 <code>enum</code> 来做 dispatch：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">enum</span> <span style="color:#2b91af">ArrayImpl</span> {
+</span></span><span style="display:flex;"><span>    Int32(I32Array),
+</span></span><span style="display:flex;"><span>    Float32(F32Array),
+</span></span><span style="display:flex;"><span>    String(StringArray),
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这时同学们一定有想问：既然是 enum，为啥不用 <a href="https://crates.io/crates/enum_dispatch">enum_dispatch</a> 这个库捏？</p>
+<p>enum_dispatch 也会自动为 ArrayImpl 这个 enum 类型实现 <code>Array</code> trait，但上面的一通分析表明这是不可能的，所以我们要自己亲自动手实现。</p>
+<h3 id="arrayimpl-的函数签名">ArrayImpl 的函数签名</h3>
+<p><code>ArrayImpl</code> 实现的 <code>get</code> 函数，究竟用什么签名比较好呢？</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> ArrayImpl {
+</span></span><span style="display:flex;"><span>  <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;<span style="color:#008000">/* ??? */</span>&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>考虑到这里只能填单个类型，我们把 <code>Scalar</code>, <code>ScalarRef</code> 也做一整套 enum 出来：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// Encapsules all variants of [`Scalar`]
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">enum</span> <span style="color:#2b91af">ScalarImpl</span> {
+</span></span><span style="display:flex;"><span>    Int32(<span style="color:#2b91af">i32</span>),
+</span></span><span style="display:flex;"><span>    Float32(<span style="color:#2b91af">f32</span>),
+</span></span><span style="display:flex;"><span>    String(String),
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// Encapsules all variants of [`ScalarRef`]
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">enum</span> <span style="color:#2b91af">ScalarRefImpl</span>&lt;&#39;a&gt; {
+</span></span><span style="display:flex;"><span>    Int32(<span style="color:#2b91af">i32</span>),
+</span></span><span style="display:flex;"><span>    Float32(<span style="color:#2b91af">f32</span>),
+</span></span><span style="display:flex;"><span>    String(&amp;&#39;a <span style="color:#2b91af">str</span>),
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样，<code>ArrayImpl</code> 就可以用这个签名了：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> ArrayImpl {
+</span></span><span style="display:flex;"><span>  <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;ScalarRefImpl&lt;&#39;_&gt;&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h3 id="实现-tryfrom-和-into-trait">实现 <code>TryFrom</code> 和 <code>Into</code> trait</h3>
+<p>接下来的目标就是在泛型函数中将 <code>ArrayImpl</code> 转换成一个 generic 类型。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>) -&gt; Result&lt;ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I1</span> = i1.try_into()?;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I2</span> = i2.try_into()?;
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* some black magic */</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这就要求我们给 <code>Array</code> 加上 <code>TryFrom</code> 和 <code>Into</code> 的 bound。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static + TryFrom&lt;ArrayImpl&gt; + Into&lt;ArrayImpl&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; Self::OwnedItem: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = Self::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span></code></pre></div><p>简单实现一下各个 <code>Array</code> 的 <code>TryFrom</code> 和 <code>ArrayImpl</code> 的 <code>From</code>，带上这个 bound 就可以编译通过了。实现的方式就是 match <code>ArrayImpl</code> 的 enum variant，然后分别做 dispatch。这里又会碰到 <code>PrimitiveArray</code> blanket implementation 导致的类型不匹配的坑，记得要给 <code>PrimitiveArray</code> 多加两个 bound: <code>Into&lt;ArrayImpl&gt;</code> 和 <code>TryFrom&lt;ArrayImpl&gt;</code></p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">PrimitiveType</span>,
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">Scalar</span>&lt;ArrayType = Self&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; T: <span style="color:#2b91af">ScalarRef</span>&lt;&#39;a, ScalarType = T, ArrayType = Self&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; T: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = T&gt;,
+</span></span><span style="display:flex;"><span>    Self: Into&lt;ArrayImpl&gt;,
+</span></span><span style="display:flex;"><span>    Self: <span style="color:#2b91af">TryFrom</span>&lt;ArrayImpl&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span></code></pre></div><h3 id="表达-arrayimpl-引用的-tryfrom-bound">表达 <code>ArrayImpl</code> 引用的 <code>TryFrom</code> bound</h3>
+<p>回顾一下之前 <code>eval_binary</code> 的签名：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>) -&gt; Result&lt;ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I1</span> = i1.try_into()?;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I2</span> = i2.try_into()?;
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* some black magic */</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>等等，好像有点不太对：这里要求的是 <code>&amp;Array: TryFrom&lt;&amp;ArrayImpl&gt;</code>，而不是 <code>Array: TryFrom&lt;ArrayImpl&gt;</code>。如何表达 <code>Array</code> 的引用有 <code>TryFrom</code> 的性质呢？</p>
+<p>再次结合之前 Day 2 的经验，我们可以用 <a href="https://doc.rust-lang.org/nomicon/hrtb.html">HRTB</a> 来表示这个性质：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static + TryFrom&lt;ArrayImpl&gt; + Into&lt;ArrayImpl&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; Self::OwnedItem: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = Self::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; &amp;&#39;a Self: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl&gt;
+</span></span><span style="display:flex;"><span>{
+</span></span></code></pre></div><p>加好以后，诶，为什么编译过不了了？编译器报了 15 个错，都是在使用 <code>Array</code> 的地方：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0277]: the trait bound `for&lt;&#39;a&gt; &amp;&#39;a A: From&lt;&amp;&#39;a array::ArrayImpl&gt;` is not satisfied
+</span></span><span style="display:flex;"><span>   --&gt; archive/day3/src/array/iterator.rs:8:33
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>8   | pub struct ArrayIterator&lt;&#39;a, A: Array&gt; {
+</span></span><span style="display:flex;"><span>    |                                 ^^^^^ the trait `for&lt;&#39;a&gt; From&lt;&amp;&#39;a array::ArrayImpl&gt;` is not implemented for `&amp;&#39;a A`
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>    = note: required because of the requirements on the impl of `for&lt;&#39;a&gt; Into&lt;&amp;&#39;a A&gt;` for `&amp;&#39;a array::ArrayImpl`
+</span></span><span style="display:flex;"><span>note: required because of the requirements on the impl of `for&lt;&#39;a&gt; TryFrom&lt;&amp;&#39;a array::ArrayImpl&gt;` for `&amp;&#39;a A`
+</span></span><span style="display:flex;"><span>   --&gt; archive/day3/src/scalar.rs:185:10
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>185 | impl&lt;&#39;a&gt; TryFrom&lt;ScalarRefImpl&lt;&#39;a&gt;&gt; for &amp;&#39;a str {
+</span></span><span style="display:flex;"><span>    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^
+</span></span><span style="display:flex;"><span>note: required by a bound in `array::Array`
+</span></span><span style="display:flex;"><span>   --&gt; archive/day3/src/array.rs:24:23
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>21  | pub trait Array: Send + Sync + Sized + &#39;static + TryFrom&lt;ArrayImpl&gt; + Into&lt;ArrayImpl&gt;
+</span></span><span style="display:flex;"><span>    |           ----- required by a bound in this
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>24  |     for&lt;&#39;a&gt; &amp;&#39;a Self: TryFrom&lt;&amp;&#39;a ArrayImpl&gt;
+</span></span><span style="display:flex;"><span>    |                       ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `array::Array`
+</span></span><span style="display:flex;"><span>help: consider introducing a `where` bound, but there might be an alternative better way to express this requirement
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>8   | pub struct ArrayIterator&lt;&#39;a, A: Array&gt; where &amp;&#39;a A: for&lt;&#39;a&gt; From&lt;&amp;&#39;a array::ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>    |                                        +++++++++++++++++++++++++++++++++++++++++++++++
+</span></span></code></pre></div><p>给 <code>Array</code> 加上这个 bound，会导致我们需要在所有用到 <code>Array</code> 的地方都写上 <code>where &amp;'a A: for&lt;'a&gt; From&lt;&amp;'a array::ArrayImpl&gt;</code>。这样就给使用者造成了很大的负担：开发者明明只想用 <code>Array</code> 来写一些泛型 SQL scalar 函数，结果每次写的时候都要带上一大堆 trait bound，这简直是徒增开发难度！</p>
+<p>怎么办呢？考虑到几个点：</p>
+<ul>
+<li>开发者一般只需要实现原始类型的泛型函数。</li>
+<li>运行时的类型转换由向量化框架来做。</li>
+</ul>
+<p>这么一想，那其实在我们表达式框架的内部要求这个 bound 是最好的解决方案了。</p>
+<p>去掉 <code>Array</code> 上的 <code>TryFrom</code> bound，把它写在 <code>eval_binary</code> 上：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;&#39;a, I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>&gt;(
+</span></span><span style="display:flex;"><span>    i1: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">ArrayImpl</span>,
+</span></span><span style="display:flex;"><span>    i2: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">ArrayImpl</span>,
+</span></span><span style="display:flex;"><span>) -&gt; Result&lt;ArrayImpl, ()&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    &amp;&#39;a I1: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = ()&gt;,
+</span></span><span style="display:flex;"><span>    &amp;&#39;a I2: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = ()&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i1: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">I1</span> = i1.try_into()?;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i2: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">I2</span> = i2.try_into()?;
+</span></span><span style="display:flex;"><span>    todo!()
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>然后，编译通过，Part 3 就结束了！</p>
+<h2 id="day-4-macro-生成-boilerplate-code">Day 4: Macro 生成 boilerplate code</h2>
+<p>随着我们的 <code>Array</code> 类型越来越多，我们需要手写的代码也越来越多。比如 <code>ArrayImpl::get</code>：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> ArrayImpl {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;ScalarRefImpl&lt;&#39;_&gt;&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">match</span> self {
+</span></span><span style="display:flex;"><span>            Self::Int32(a) =&gt; a.get(idx).map(ScalarRefImpl::Int32),
+</span></span><span style="display:flex;"><span>            Self::Int64(a) =&gt; a.get(idx).map(ScalarRefImpl::Int64),
+</span></span><span style="display:flex;"><span>            Self::Float32(a) =&gt; a.get(idx).map(ScalarRefImpl::Float32),
+</span></span><span style="display:flex;"><span>            <span style="color:#008000">// 每添加一个类型就要多写一个 arm ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>包括 <code>TryFrom</code>, <code>len</code> 等等函数，也需要我们手动实现动态分发。</p>
+<p>有没有什么办法可以写一次就自动给所有类型生成相关的动态分发代码呢？聪明的你一定想到了用宏展开来解决：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// Implements dispatch functions for [`Array`]
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>macro_rules! impl_array_dispatch {
+</span></span><span style="display:flex;"><span>    (<span style="color:#00f">$(</span> { <span style="color:#00f">$Abc</span>:<span style="color:#2b91af">ident</span>, <span style="color:#00f">$abc</span>:<span style="color:#2b91af">ident</span>, <span style="color:#00f">$AbcArray</span>:<span style="color:#2b91af">ty</span>, <span style="color:#00f">$AbcArrayBuilder</span>:<span style="color:#2b91af">ty</span>, <span style="color:#00f">$Owned</span>:<span style="color:#2b91af">ty</span>, <span style="color:#00f">$Ref</span>:<span style="color:#2b91af">ty</span> } ),*) =&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">impl</span> ArrayImpl {
+</span></span><span style="display:flex;"><span>            <span style="color:#a31515">/// Get the value at the given index.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>            <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;ScalarRefImpl&lt;&#39;_&gt;&gt; {
+</span></span><span style="display:flex;"><span>                <span style="color:#00f">match</span> self {
+</span></span><span style="display:flex;"><span>                    <span style="color:#00f">$(</span>
+</span></span><span style="display:flex;"><span>                        Self::<span style="color:#00f">$Abc</span>(array) =&gt; array.get(idx).map(ScalarRefImpl::<span style="color:#00f">$Abc</span>),
+</span></span><span style="display:flex;"><span>                    )*
+</span></span><span style="display:flex;"><span>                }
+</span></span><span style="display:flex;"><span>            }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>impl_array_dispatch! {
+</span></span><span style="display:flex;"><span>    { Int32, int32, Int32Array, Int32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>    { Int64, int64, Int64Array, Int64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>    { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> },
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>问题来了：我们的 <code>impl_array_dispatch</code> macro 肯定是到处都有——有的用来 impl <code>TryFrom</code> for <code>ArrayImpl</code>, 有的用来 impl <code>ArrayImpl</code>。如果我们有多个这样的 macro，macro 展开的参数 <code>{ Int32, int32, Int32Array, Int32ArrayBuilder, i32, i32 }</code> 也要写很多份。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>impl_array_dispatch! {
+</span></span><span style="display:flex;"><span>    { Int32, int32, Int32Array, Int32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>    { Int64, int64, Int64Array, Int64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>    { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> },
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>impl_array_try_from! {
+</span></span><span style="display:flex;"><span>    { Int32, int32, Int32Array, Int32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>    { Int64, int64, Int64Array, Int64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>    { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> },
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// ...
+</span></span></span></code></pre></div><p>有什么办法可以解决这个问题呢？试试 macro 能不能传 macro 参数进去：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>macro_rules! list_all_variants! {
+</span></span><span style="display:flex;"><span>    () =&gt; {
+</span></span><span style="display:flex;"><span>        { Int16, int16, I16Array, I16ArrayBuilder, <span style="color:#2b91af">i16</span>, <span style="color:#2b91af">i16</span> },
+</span></span><span style="display:flex;"><span>        { Int32, int32, I32Array, I32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>        { Int64, int64, I64Array, I64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>        { Float32, float32, F32Array, F32ArrayBuilder, <span style="color:#2b91af">f32</span>, <span style="color:#2b91af">f32</span> },
+</span></span><span style="display:flex;"><span>        { Float64, float64, F64Array, F64ArrayBuilder, <span style="color:#2b91af">f64</span>, <span style="color:#2b91af">f64</span> },
+</span></span><span style="display:flex;"><span>        { Bool, <span style="color:#2b91af">bool</span>, BoolArray, BoolArrayBuilder, <span style="color:#2b91af">bool</span>, <span style="color:#2b91af">bool</span> },
+</span></span><span style="display:flex;"><span>        { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>impl_array_dispatch! { list_all_variants! {} }
+</span></span></code></pre></div><p>紧接着编译器报了一堆错，五彩缤纷：</p>
+<p><img src="type-exercise-3-errors.png" alt="类型体操的报错"></p>
+<p>这是为什么捏？</p>
+<p>这就要从 Rust macro 的执行方式讲起了。我们用正常的 Rust 程序来打个比方：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> list_all_variants() -&gt; Vec&lt;Variants&gt;;
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> impl_array_dispatch(data: Vec&lt;Variants&gt;) -&gt; <span style="color:#2b91af">GeneratedCode</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>impl_array_dispatch(list_all_variants());
+</span></span></code></pre></div><p>对于 Rust 程序来说，执行的方法是先调用 <code>list_all_variants()</code> 获得返回值，然后把这个返回值交给 <code>impl_array_dispatch</code> 来继续执行，由里到外展开。</p>
+<p>对于 Rust macro 来说，情况就截然相反：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>impl_array_dispatch! { list_all_variants! {} }
+</span></span></code></pre></div><p>在这里，Rust 编译时先尝试展开 <code>impl_array_dispatch</code> 这个 macro。此时，<code>list_all_variants! {}</code> 这些 token 会作为 macro 的参数传进去。但我们需要的是符合 <code>$( { $Abc:ident, $abc:ident, $AbcArray:ty, $AbcArrayBuilder:ty, $Owned:ty, $Ref:ty } ),*</code> 的一个参数，<code>list_all_variants! {}</code> 这四个 token 显然不满足 <code>impl_array_dispatch</code> macro 需要的参数。</p>
+<p>怎么在这种由外到里展开的顺序里面实现宏代码的复用呢？我拍脑袋想出了一种聪明的办法：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// `for_all_variants` includes all variants of our array types. If you added a new array
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// type inside the project, be sure to add a variant here.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// Every tuple has four elements, where
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// `{ enum variant name, function suffix name, array type, builder type, scalar type }`
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>macro_rules! for_all_variants {
+</span></span><span style="display:flex;"><span>    (<span style="color:#00f">$macro</span>:<span style="color:#2b91af">tt</span>) =&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">$macro</span>! {
+</span></span><span style="display:flex;"><span>            { Int16, int16, I16Array, I16ArrayBuilder, <span style="color:#2b91af">i16</span>, <span style="color:#2b91af">i16</span> },
+</span></span><span style="display:flex;"><span>            { Int32, int32, I32Array, I32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>            { Int64, int64, I64Array, I64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>            { Float32, float32, F32Array, F32ArrayBuilder, <span style="color:#2b91af">f32</span>, <span style="color:#2b91af">f32</span> },
+</span></span><span style="display:flex;"><span>            { Float64, float64, F64Array, F64ArrayBuilder, <span style="color:#2b91af">f64</span>, <span style="color:#2b91af">f64</span> },
+</span></span><span style="display:flex;"><span>            { Bool, <span style="color:#2b91af">bool</span>, BoolArray, BoolArrayBuilder, <span style="color:#2b91af">bool</span>, <span style="color:#2b91af">bool</span> },
+</span></span><span style="display:flex;"><span>            { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    };
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>for_all_variants! { impl_array_builder_dispatch }
+</span></span></code></pre></div><p>这样一来，Rust 先展开 <code>for_all_variants</code>，得到：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>impl_array_builder_dispatch! {
+</span></span><span style="display:flex;"><span>    { Int16, int16, I16Array, I16ArrayBuilder, <span style="color:#2b91af">i16</span>, <span style="color:#2b91af">i16</span> },
+</span></span><span style="display:flex;"><span>    { Int32, int32, I32Array, I32ArrayBuilder, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span> },
+</span></span><span style="display:flex;"><span>    { Int64, int64, I64Array, I64ArrayBuilder, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span> },
+</span></span><span style="display:flex;"><span>    { Float32, float32, F32Array, F32ArrayBuilder, <span style="color:#2b91af">f32</span>, <span style="color:#2b91af">f32</span> },
+</span></span><span style="display:flex;"><span>    { Float64, float64, F64Array, F64ArrayBuilder, <span style="color:#2b91af">f64</span>, <span style="color:#2b91af">f64</span> },
+</span></span><span style="display:flex;"><span>    { Bool, <span style="color:#2b91af">bool</span>, BoolArray, BoolArrayBuilder, <span style="color:#2b91af">bool</span>, <span style="color:#2b91af">bool</span> },
+</span></span><span style="display:flex;"><span>    { String, string, StringArray, StringArrayBuilder, String, &amp;&#39;a <span style="color:#2b91af">str</span> }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这和我们在最开始手敲这些类型声明时的 macro 代码一摸一样。</p>
+<p>所以，通过调换 <code>impl_array_builder_dispatch</code> 和模版 <code>for_all_variants</code> 的内外位置关系，我们就做到了 <code>for_all_variants</code> 内部信息的复用。这样以来，我们就可以到处实现动态分发的函数了：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>for_all_variants! { impl_array_builder_dispatch }
+</span></span><span style="display:flex;"><span>for_all_variants! { impl_array_try_from }
+</span></span><span style="display:flex;"><span>for_all_variants! { impl_scalar_try_from }
+</span></span><span style="display:flex;"><span><span style="color:#008000">// ...
+</span></span></span></code></pre></div><p>于是乎，我们的 <code>ArrayImpl</code> 可以在修改少量代码（往 <code>for_all_variants</code> 里面加一条记录）的情况下支持越来越多的类型。Day 4 也结束了！</p>
+<h3 id="思考题">思考题</h3>
+<p>在本系列中，我们通过 <code>ArrayImpl</code> 来做动态分发。是否可以用 <code>pub struct BoxedArray(Box&lt;dyn Any&gt;)</code> 来做动态分发？</p>
+<p>答案是可以，我们可以有很多种做法：</p>
+<ul>
+<li>使用 <code>Any</code> 的 <code>TypeId</code> 替代 <code>ArrayImpl::XXX</code> 来判断应该 downcast 到什么类型，然后分发。</li>
+<li>为 Array 实现一套新的 trait：<code>ArrayDispatch</code>，里面加一个 <code>array_type(&amp;self) -&gt; ArrayTypeEnum</code> 函数。定义 <code>pub struct BoxedArray(Box&lt;dyn ArrayDispatch&gt;)</code>，通过 <code>array_type</code> 来决定 downcast 到什么类型。</li>
+</ul>
+<h2 id="day-5-表达式向量化-上">Day 5: 表达式向量化 (上)</h2>
+<p>经过了整整四天的类型体操，我们终于可以做表达式向量化了：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">let</span> expr = BinaryExpression::&lt;StringArray, StringArray, BoolArray, _&gt;::new(str_contains);
+</span></span><span style="display:flex;"><span><span style="color:#008000">// We only need to pass `ArrayImpl` to the expression, and it will do everything for us,
+</span></span></span><span style="display:flex;"><span><span style="color:#008000">// including type checks, loopping, etc.
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">let</span> result = expr.eval(<span style="color:#008000">/* &amp;ArrayImpl,  &amp;ArrayImpl */</span>).unwrap();
+</span></span></code></pre></div><p><code>BinaryExpression</code> 的向量化代码非常好写：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>&gt; BinaryExpression&lt;I1, I2, O&gt;
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Evaluate the expression with the given array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> eval&lt;&#39;a&gt;(&amp;self, i1: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">ArrayImpl</span>, i2: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">ArrayImpl</span>) -&gt; Result&lt;ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> i1a: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">I1</span> = i1.try_into()?;
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> i2a: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">I2</span> = i2.try_into()?;
+</span></span><span style="display:flex;"><span>        assert_eq!(i1.len(), i2.len(), <span style="color:#a31515">&#34;array length mismatch&#34;</span>);
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder: <span style="color:#2b91af">O</span>::Builder = O::Builder::with_capacity(i1.len());
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1a.iter().zip(i2a.iter()) {
+</span></span><span style="display:flex;"><span>            <span style="color:#00f">match</span> (i1, i2) {
+</span></span><span style="display:flex;"><span>                (Some(i1), Some(i2)) =&gt; builder.push(Some((self.func)(i1, i2).as_scalar_ref())),
+</span></span><span style="display:flex;"><span>                _ =&gt; builder.push(None),
+</span></span><span style="display:flex;"><span>            }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        Ok(builder.finish().into())
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>但主要问题是：</p>
+<ul>
+<li><code>BinaryExpression</code> 结构体应该怎么定义？</li>
+<li><code>self.func</code> 应该是什么类型？</li>
+</ul>
+<p>先考虑结构体怎么定义。理论上结构体里面只要存一个函数对象 (比如 <code>str_contains</code>) 就行了。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">BinaryExpression</span>&lt;I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>, F&gt; {
+</span></span><span style="display:flex;"><span>    func: <span style="color:#2b91af">F</span>,
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译器无情打脸：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0392]: parameter `O` is never used
+</span></span><span style="display:flex;"><span>  --&gt; archive/day5/src/expr.rs:23:51
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>23 | pub struct BinaryExpression&lt;I1: Array, I2: Array, O: Array, F&gt; {
+</span></span><span style="display:flex;"><span>   |                                                   ^ unused parameter
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = help: consider removing `O`, referring to it in a field, or using a marker such as `PhantomData`
+</span></span><span style="display:flex;"><span>   = help: if you intended `O` to be a const parameter, use `const O: usize` instead
+</span></span></code></pre></div><p><code>PhantomData</code> 是个啥？这个和协变与 drop checker 有关，这里不再深入。总之，根据编译器的提示，我们需要把这些 generic parameter 都加进结构体：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">BinaryExpression</span>&lt;I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>, F&gt; {
+</span></span><span style="display:flex;"><span>    func: <span style="color:#2b91af">F</span>,
+</span></span><span style="display:flex;"><span>    _phantom: <span style="color:#2b91af">PhantomData</span>&lt;(I1, I2, O)&gt;,
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>接下来考虑 <code>func</code> 的类型。想到 <code>str_contains</code> 函数的签名：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> str_contains(i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>) -&gt; <span style="color:#2b91af">bool</span> {
+</span></span><span style="display:flex;"><span>    i1.contains(i2)
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>推广之，则可以写出对应的 Fn trait：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>F: Fn(I1::RefItem&lt;&#39;a&gt;, I2::RefItem&lt;&#39;a&gt;) -&gt; <span style="color:#2b91af">O</span>::OwnedItem
+</span></span></code></pre></div><p>在 <code>impl BinaryExpression</code> 的时候，我们必然要提供一个 lifetime parameter。这个参数可以在 impl 的时候指定：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;&#39;a, I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>, F&gt; BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    &amp;&#39;a I1: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    &amp;&#39;a I2: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    F: Fn(I1::RefItem&lt;&#39;a&gt;, I2::RefItem&lt;&#39;a&gt;) -&gt; <span style="color:#2b91af">O</span>::OwnedItem,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> new(func: <span style="color:#2b91af">F</span>) -&gt; <span style="color:#2b91af">Self</span> {
+</span></span><span style="display:flex;"><span>        Self {
+</span></span><span style="display:flex;"><span>            func,
+</span></span><span style="display:flex;"><span>            _phantom: <span style="color:#2b91af">PhantomData</span>,
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>最后跑一下编译测试：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">#[test]</span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> test_str_contains() {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> expr = BinaryExpression::&lt;StringArray, StringArray, BoolArray, _&gt;::new(str_contains);
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> result = expr.eval(&amp;test_array(), &amp;test_array()).unwrap();
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>大功告成！通过一个简单的 <code>BinaryExpression</code> struct，我们就可以直接将普通函数向量化了。</p>
+<h2 id="day-6-表达式向量化-下">Day 6: 表达式向量化 (下)</h2>
+<p>事情往往没有这么简单。在实际的表达式执行中，开发者通常会写出这样的逻辑：</p>
+<ul>
+<li>根据收到的 SQL Plan 创建表达式对象。</li>
+<li>从存储捞 Array 然后执行表达式。</li>
+</ul>
+<p>写成 Rust 代码，大概是这个样子：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">let</span> expr = build_expression(prost_message);
+</span></span><span style="display:flex;"><span><span style="color:#00f">let</span> l = storage.get_data();
+</span></span><span style="display:flex;"><span><span style="color:#00f">let</span> r = storage.get_data();
+</span></span><span style="display:flex;"><span><span style="color:#00f">let</span> result = expr.eval(&amp;l, &amp;r).unwrap();
+</span></span></code></pre></div><p>这个 <code>build_expression</code> 函数应该怎么写捏？我们以返回向量化 <code>cmp_ge</code> 函数的表达式为例：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// Return if `i1 &gt; i2`. Note that `i1` and `i2` could be different types. This
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// function will automatically cast them into `C` type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// * `I1`: left input type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// * `I2`: right input type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// * `C`: cast type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;&#39;a, I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, C: <span style="color:#2b91af">Array</span> + &#39;static&gt;(
+</span></span><span style="display:flex;"><span>    i1: <span style="color:#2b91af">I1</span>::RefItem&lt;&#39;a&gt;,
+</span></span><span style="display:flex;"><span>    i2: <span style="color:#2b91af">I2</span>::RefItem&lt;&#39;a&gt;,
+</span></span><span style="display:flex;"><span>) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span><span style="color:#2b91af">where</span>
+</span></span><span style="display:flex;"><span>    I1::RefItem&lt;&#39;a&gt;: Into&lt;C::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    I2::RefItem&lt;&#39;a&gt;: Into&lt;C::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    C::RefItem&lt;&#39;a&gt;: PartialOrd,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> create_expression(
+</span></span><span style="display:flex;"><span>) -&gt; <span style="color:#2b91af">BinaryExpression</span>&lt;StringArray, StringArray, BoolArray, <span style="color:#00f">impl</span> Fn(&amp;<span style="color:#2b91af">str</span>, &amp;<span style="color:#2b91af">str</span>) -&gt; <span style="color:#2b91af">bool</span>&gt; {
+</span></span><span style="display:flex;"><span>    BinaryExpression::&lt;StringArray, StringArray, BoolArray, _&gt;::new(
+</span></span><span style="display:flex;"><span>        cmp_ge::&lt;StringArray, StringArray, StringArray&gt;,
+</span></span><span style="display:flex;"><span>    )
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>尝试编译一下，编译器报了一个神奇的错：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error: implementation of `FnOnce` is not general enough
+</span></span><span style="display:flex;"><span>   --&gt; archive/day5/src/expr.rs:101:10
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>101 |     ) -&gt; BinaryExpression&lt;StringArray, StringArray, BoolArray, impl Fn(&amp;str, &amp;str) -&gt; bool&gt; {
+</span></span><span style="display:flex;"><span>    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation of `FnOnce` is not general enough
+</span></span><span style="display:flex;"><span>    |
+</span></span><span style="display:flex;"><span>    = note: `fn(&lt;string_array::StringArray as array::Array&gt;::RefItem&lt;&#39;_&gt;, &lt;string_array::StringArray as array::Array&gt;::RefItem&lt;&#39;_&gt;) -&gt; bool {expr::cmp::cmp_ge::&lt;&#39;_, string_array::StringArray, string_array::StringArray, string_array::StringArray&gt;}` must implement `FnOnce&lt;(&amp;str, &amp;&#39;0 str)&gt;`, for any lifetime `&#39;0`...
+</span></span><span style="display:flex;"><span>    = note: ...but it actually implements `FnOnce&lt;(&amp;&#39;1 str, &amp;&#39;1 str)&gt;`, for some specific lifetime `&#39;1`
+</span></span></code></pre></div><p>而如果是直接调用不带泛型的标量函数（比如 <code>str_contains</code>）：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> create_expression(
+</span></span><span style="display:flex;"><span>) -&gt; <span style="color:#2b91af">BinaryExpression</span>&lt;StringArray, StringArray, BoolArray, <span style="color:#00f">impl</span> Fn(&amp;<span style="color:#2b91af">str</span>, &amp;<span style="color:#2b91af">str</span>) -&gt; <span style="color:#2b91af">bool</span>&gt; {
+</span></span><span style="display:flex;"><span>    BinaryExpression::&lt;StringArray, StringArray, BoolArray, _&gt;::new(str_contains)
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>则一点问题也没有。</p>
+<p>为什么捏？感觉这就和 GAT 下的生命周期表达有关系了。</p>
+<p>首先分析一下编译错误信息，对于 <code>cmp_ge</code> 的报错，</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>= note: `fn(&lt;string_array::StringArray as array::Array&gt;::RefItem&lt;&#39;_&gt;, &lt;string_array::StringArray as array::Array&gt;::RefItem&lt;&#39;_&gt;) -&gt; bool {expr::cmp::cmp_ge::&lt;&#39;_, string_array::StringArray, string_array::StringArray, string_array::StringArray&gt;}` must implement `FnOnce&lt;(&amp;str, &amp;&#39;0 str)&gt;`, for any lifetime `&#39;0`...
+</span></span><span style="display:flex;"><span>    = note: ...but it actually implements `FnOnce&lt;(&amp;&#39;1 str, &amp;&#39;1 str)&gt;`, for some specific lifetime `&#39;1`
+</span></span></code></pre></div><p>意思是 <code>cmp_ge</code> 的两个参数，生命周期是<strong>一个</strong>指定的 <code>'a</code>；而这里如果要作为 <code>create_expression</code> 的返回值，要求 <code>cmp_ge</code> 对于所有生命周期都成立。</p>
+<p>也就是说，对于 <code>contains_str</code> 这个函数，编译器可以在任何地方都推导出它对于所有生命周期都成立；而对于 <code>cmp_ge</code> 这个函数，编译器在函数体返回值的地方无法推导出它对于所有生命周期都成立，于是给它绑定了一个特定的生命周期 <code>'a</code>。感觉这是一个比较难解决的编译器 bug。</p>
+<p>那我们能不能把这个 <code>for&lt;'a&gt;</code> 的性质强行写进函数签名里呢？</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> create_expression(
+</span></span><span style="display:flex;"><span>) -&gt; <span style="color:#2b91af">BinaryExpression</span>&lt;StringArray, StringArray, BoolArray, <span style="color:#00f">impl</span> Fn(&amp;<span style="color:#2b91af">str</span>, &amp;<span style="color:#2b91af">str</span>) -&gt; <span style="color:#2b91af">bool</span>&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* NOTE: THIS CODE WON&#39;T COMPILE! */</span>
+</span></span><span style="display:flex;"><span>    BinaryExpression::&lt;<span style="color:#00f">for</span>&lt;&#39;a&gt;, StringArray, StringArray, BoolArray, _&gt;::new(str_contains)
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>很显然，Rust 没法表达这种性质。因此，我们必须想办法把 <code>BinaryExpression</code> 里面的生命周期去掉，从而在这里让编译器能够推导出 <code>cmp_ge</code> 这个泛型函数对“所有生命周期”都成立。</p>
+<p>在 type-exercise 仓库里，我提供了两种办法：</p>
+<ul>
+<li>the easy way &ndash; 把所有函数都实现成结构体，函数体内的生命周期和 <code>&amp;self</code> 一致，规避这些问题。缺点是开发者得把所有标量函数写成结构体，有点麻烦。</li>
+<li>the hard way &ndash; 想办法证明所有的符合签名的标量函数都有 “for all lifetime” 的性质。</li>
+</ul>
+<p>这篇文章就会着重分析如何一步步证明函数的性质，并去掉生命周期。</p>
+<h3 id="证明泛型标量函数对所有生命周期成立">证明泛型标量函数对所有生命周期成立</h3>
+<p>在实现 <code>cmp_ge</code> 的时候，有一个很讨厌的点：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> cmp_ge&lt;&#39;a, I1: <span style="color:#2b91af">Array</span>, I2: <span style="color:#2b91af">Array</span>, C: <span style="color:#2b91af">Array</span> + &#39;static&gt;(
+</span></span><span style="display:flex;"><span>    i1: <span style="color:#2b91af">I1</span>::RefItem&lt;&#39;a&gt;,
+</span></span><span style="display:flex;"><span>    i2: <span style="color:#2b91af">I2</span>::RefItem&lt;&#39;a&gt;,
+</span></span><span style="display:flex;"><span>) -&gt; <span style="color:#2b91af">bool</span>
+</span></span></code></pre></div><p>为了写出 i1, i2 的类型，不得不在 generic parameter 里面加一个 <code>'a</code>。就是这个 <code>'a</code> 成为了痛苦的根源。</p>
+<p>如何抹掉这个生命周期呢？一拍脑袋能想到的办法就是用一个 trait 作为桥梁，抹平这个生命周期，并且证明 <code>cmp_ge</code> 对于所有生命周期都成立。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// A trait over all scalar SQL functions.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// It takes `A` and `B` as input prameter, and outputs scalar of type `O`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> BinaryExprFunc&lt;A: <span style="color:#2b91af">Scalar</span>, B: <span style="color:#2b91af">Scalar</span>, O: <span style="color:#2b91af">Scalar</span>&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Evaluate a binary function with two references to data.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> eval(&amp;self, i1: <span style="color:#2b91af">A</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">B</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">O</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这个 trait 的定义里面完全没有生命周期，这也意味着向量化的时候直接写：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;I1, I2, O, F&gt; BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    O: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I1: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I2: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    F: <span style="color:#2b91af">BinaryExprFunc</span>&lt;I1, I2, O&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>即可。无需给 <code>F</code> 提供生命周期的参数，定义里面也不出现任何生命周期。</p>
+<p>那么怎么证明 <code>BinaryExprFunc</code> 对于标量函数成立呢？比如我们能不能通过类似于宏展开的方法，做这样的事情：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> BinaryExprFunc <span style="color:#00f">for</span> str_contains {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>这是不可能的。在 Rust 里，一个函数就是一个对象。它的类型是写不出来的。而 <code>impl Trait for Type</code> 的语法，要求最后这个位置是一个 Type。在这种情况下，我们只能做 blanket implementation：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// Blanket implementation for all binary expression functions
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span>&lt;A: <span style="color:#2b91af">Scalar</span>, B: <span style="color:#2b91af">Scalar</span>, O: <span style="color:#2b91af">Scalar</span>, F&gt; BinaryExprFunc&lt;A, B, O&gt; <span style="color:#00f">for</span> F
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    F: Fn(A::RefType&lt;&#39;_&gt;, B::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">O</span>,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> eval(&amp;self, i1: <span style="color:#2b91af">A</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">B</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">O</span> {
+</span></span><span style="display:flex;"><span>        self(i1, i2)
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>为所有符合 <code>Fn(A::RefType&lt;'_&gt;, B::RefType&lt;'_&gt;) -&gt; O</code> 条件的标量函数都实现 <code>BinaryExprFunc</code>。</p>
+<p>这么一个桥梁 trait 实现完以后，我们先验证一下已有的几个标量函数是否能够匹配上：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#008000">// 一个类似 str_contains 的函数
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">fn</span> binary_str(_: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>, _: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>) -&gt; String {
+</span></span><span style="display:flex;"><span>    todo!()
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 一个类似 cmp_ge 的函数
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">fn</span> binary_generics&lt;A: <span style="color:#2b91af">Scalar</span>, B: <span style="color:#2b91af">Scalar</span>, O: <span style="color:#2b91af">Scalar</span>&gt;(_: <span style="color:#2b91af">A</span>::RefType&lt;&#39;_&gt;, _: <span style="color:#2b91af">B</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">O</span> {
+</span></span><span style="display:flex;"><span>    todo!()
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 用于验证一个函数是否 impl 某个 trait
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">fn</span> test_if_impl&lt;A: <span style="color:#2b91af">Scalar</span>, B: <span style="color:#2b91af">Scalar</span>, O: <span style="color:#2b91af">Scalar</span>, F: <span style="color:#2b91af">BinaryExprFunc</span>&lt;A, B, O&gt;&gt;(_: <span style="color:#2b91af">F</span>) {}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">#[test]</span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> test_simple_generics_function() {
+</span></span><span style="display:flex;"><span>    test_if_impl::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">f32</span>, <span style="color:#2b91af">i64</span>, _&gt;(binary_generics::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">f32</span>, <span style="color:#2b91af">i64</span>&gt;);
+</span></span><span style="display:flex;"><span>    test_if_impl::&lt;String, String, String, _&gt;(binary_str);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译通过！说明我们的 trait <code>BinaryExprFunc</code> 架起了标量函数和向量化结构体的桥梁，证明了类似于 <code>cmp_ge</code> 的泛型函数对于<strong>所有生命周期</strong>都成立。接下来，向量化就好写多了。</p>
+<h3 id="实现新的标量函数">实现新的标量函数</h3>
+<p>回过来看 <code>cmp_ge</code>，它需要支持把用户输入的类型 cast 到新的类型以后再比较。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span><span style="color:#2b91af">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* ??? */</span>
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这里的 where bound 应该怎么写呢？有了之前写 HRTB 的经验，我们可以很方便地写出：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span><span style="color:#2b91af">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I1::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I2::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; C::RefType&lt;&#39;a&gt;: PartialOrd,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译器又一次无情报错：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>error[E0623]: <span style="color:#2b91af">lifetime</span> mismatch
+</span></span><span style="display:flex;"><span>  --&gt; <span style="color:#2b91af">archive</span>/day6-hard/src/expr/cmp.rs:42:8
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>34 | <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span>   |                                                      ---------------      --------------- these two types are declared with different lifetimes...
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>42 |     i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>   |        ^^^^ ...but data from <span style="">`</span>i2<span style="">`</span> flows into <span style="">`</span>i1<span style="">`</span> here
+</span></span></code></pre></div><p>这是为什么捏？我们都证明了</p>
+<ul>
+<li>对于所有生命周期，I1 的引用可以转化为 C 的引用</li>
+<li>对于所有生命周期，I2 的引用可以转化为 C 的引用</li>
+<li>对于所有生命周期，C 实现了 PartialOrd</li>
+</ul>
+<p>等等，好像还差一步：不同生命周期的 C 应该如何比较？<code>I1::RefItem&lt;'_&gt;, I2::RefItem&lt;'_&gt;</code> 经过 desugar 以后实际上是：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;&#39;a, &#39;b, I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;a&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;b&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span></code></pre></div><p>它们的生命周期是不一样的。而我们只证明了：</p>
+<ul>
+<li><code>I1::RefType&lt;'a&gt;: Into&lt;C::RefType&lt;'a&gt;&gt;</code> &ndash; I1 的引用可以转化为<strong>相同生命周期的</strong> C 的引用</li>
+<li><code>I2::RefType&lt;'b&gt;: Into&lt;C::RefType&lt;'b&gt;&gt;</code> &ndash; I2 的引用可以转化为<strong>相同生命周期的</strong> C 的引用</li>
+</ul>
+<p>却没有证明：</p>
+<ul>
+<li><code>C::RefType&lt;'a&gt;: PartialOrd&lt;C::RefType&lt;'b&gt;&gt;</code> &ndash; 不同生命周期的 <code>C</code> 可以比较。</li>
+</ul>
+<p>这该怎么办捏？先试着用 HRTB 写一下 <code>for&lt;'a&gt; C::RefType&lt;'a&gt;: PartialOrd</code> 这个 bound。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span><span style="color:#2b91af">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I1::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I2::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a, &#39;b&gt; C::RefType&lt;&#39;a&gt;: PartialOrd&lt;C::RefType&lt;&#39;b&gt;&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>验证一下 <code>cmp_ge</code> 有没有匹配上 <code>BinaryExprFunc</code> 这个 bound：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> test_cmp_ge() {
+</span></span><span style="display:flex;"><span>    test_if_impl::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">bool</span>, _&gt;(cmp_ge::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>, <span style="color:#2b91af">i64</span>&gt;);
+</span></span><span style="display:flex;"><span>    test_if_impl::&lt;String, String, <span style="color:#2b91af">bool</span>, _&gt;(cmp_ge::&lt;String, String, String&gt;);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译通过！</p>
+<p>但如果要实现 <code>cmp_eq</code>，对于 <code>Eq</code> 这种 bound 怎么办捏？根据 <code>Eq</code> trait 的定义：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Eq: PartialEq&lt;Self&gt; { }
+</span></span></code></pre></div><p><code>Eq</code> 根本没有给我们提供指定 <code>Rhs</code> 的机会！这里直接写死了 <code>Rhs = Self</code>。这就意味着，我们必须找一种办法把 <code>i1</code> <code>i2</code> 两个变量的生命周期统一起来。这该怎么办？</p>
+<p><em>注：实际上 PartialEq 是可以指定 Rhs 的，这里只是用类似于 Eq 这样的 trait 举个例子，毕竟有很多其他的 trait 是不提供 Rhs 的，但开发者往往会用到……</em></p>
+<h3 id="协变与逆变">协变与逆变</h3>
+<p>简单来说，如果我们写一个正常的函数：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> cmp_eq(i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">i32</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">i32</span>) -&gt; <span style="color:#2b91af">bool</span> {
+</span></span><span style="display:flex;"><span>  i1 == i2
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>在 <code>i1 == i2</code> 的时候，编译器会自动把它们的生命周期统一。因为 <code>&amp;'a T</code> 关于 <code>'a</code> 是协变的 (covariant) (其他规则见 <a href="https://doc.rust-lang.org/nomicon/subtyping.html">Subtyping and Variance - The Rustonomicon</a>)。因此，编译器在 <code>i1 == i2</code> 的地方把长的生命周期缩短，以让 <code>i1: &amp;i32, i2: &amp;i32</code> 符合 <code>PartialEq&lt;i32&gt;</code> 的签名：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> PartialEq&lt;Rhs = Self&gt; 
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> eq(&amp;self, other: <span style="color:#00f">&amp;</span><span style="color:#2b91af">Rhs</span>) -&gt; <span style="color:#2b91af">bool</span>; <span style="color:#008000">// &amp;self 和 &amp;Rhs 生命周期需要**相同**
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>那么什么是逆变捏？举个例子：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> test_func&lt;&#39;short&gt;(i1: <span style="color:#00f">&amp;</span>&#39;short <span style="color:#2b91af">i32</span>, i2: <span style="color:#00f">&amp;</span>&#39;short <span style="color:#2b91af">i32</span>) {}
+</span></span></code></pre></div><p>调用 <code>test_func</code> 的时候，<code>i1</code> <code>i2</code> 的生命周期可能不同：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> another_test_func(outer: <span style="color:#00f">&amp;</span><span style="color:#2b91af">i32</span>) {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> val = 2333
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> inner = &amp;val;
+</span></span><span style="display:flex;"><span>    test_func(inner, outer);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>此时 <code>inner</code> 的生命周期必然比 <code>outer</code> 短。编译器决定 <code>test_func</code> 的 <code>'short</code> 就是 <code>inner</code> 的生命周期，然后将长的生命周期 <code>outer</code> 变成短的。所以对于 <code>&amp;'long i32</code> 这个类型来说，它可以把生命周期变短，这叫协变；对于 <code>fn&lt;'short&gt;(&amp;'short i32, &amp;'short i32)</code> 来说，它可以接收生命周期比 <code>&amp;'short i32</code> 更长的变量，也就是将函数的签名变成 <code>fn&lt;'short, 'long: 'short&gt;(&amp;'short i32, &amp;'long i32)</code>。这就叫逆变。</p>
+<p>以上分析纯属我瞎扯，具体编译器是怎么实现的请阅读 <a href="https://rustc-dev-guide.rust-lang.org/variance.html">Variance of type and lifetime parameters - Guide to Rustc Development</a>。我不是类型论专家，上面可能有口误之处，见谅。</p>
+<p>协变和逆变都解释完了，这和 GAT 又有什么关系捏？</p>
+<h3 id="实现-gat-的生命周期转化">实现 GAT 的生命周期转化</h3>
+<p>回到 <code>Scalar</code> trait 的声明。对于 GAT 类型 <code>RefType</code> 来说：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Scalar <span style="color:#008000">/* 省略 */</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefType</span>&lt;&#39;a&gt; <span style="color:#008000">/* 省略 bound */</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><code>i32::RefType&lt;'short&gt;</code> 和 <code>i32::RefType&lt;'long&gt;</code> 之间是不能自动转换的：GAT 类型不是协变的！</p>
+<p>这就意味着我们要手动实现生命周期之间的转换。根据 <a href="https://internals.rust-lang.org/t/variance-of-lifetime-arguments-in-gats/14769/19">dtolnay 大佬的建议</a>，我们给 <code>Scalar</code> 加上一个 <code>upcast_gat</code> 函数：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Scalar <span style="color:#008000">/* ... */</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* ... */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> upcast_gat&lt;&#39;short, &#39;long: &#39;short&gt;(long: <span style="color:#2b91af">Self</span>::RefType&lt;&#39;long&gt;) -&gt; <span style="color:#2b91af">Self</span>::RefType&lt;&#39;short&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样一来，我们就可以在泛型函数里把 <code>Scalar::RefType&lt;'long&gt;</code> 转换为 <code>Scalar::RefType&lt;'short&gt;</code> 了，相当于手动实现了 GAT 关于生命周期的协变。</p>
+<p>随手 impl 一下各个类型的 <code>upcast_gat</code>：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> Scalar <span style="color:#00f">for</span> String {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> upcast_gat&lt;&#39;short, &#39;long: &#39;short&gt;(long: <span style="color:#00f">&amp;</span>&#39;long <span style="color:#2b91af">str</span>) -&gt; <span style="color:#00f">&amp;</span>&#39;short <span style="color:#2b91af">str</span> {
+</span></span><span style="display:flex;"><span>        long
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Scalar <span style="color:#00f">for</span> <span style="color:#00f">$Owned</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> upcast_gat&lt;&#39;short, &#39;long: &#39;short&gt;(long: <span style="color:#00f">$Owned</span>) -&gt; <span style="color:#00f">$Owned</span> {
+</span></span><span style="display:flex;"><span>        long
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>现在就可以自如转换了！</p>
+<h3 id="重新实现新的标量函数">重新实现新的标量函数</h3>
+<p>有了 <code>upcast_gat</code> 之后，<code>PartialOrd</code> 的 bound 就不用把 <code>Rhs</code> 写出来了：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> cmp_ge&lt;I1: <span style="color:#2b91af">Scalar</span>, I2: <span style="color:#2b91af">Scalar</span>, C: <span style="color:#2b91af">Scalar</span>&gt;(i1: <span style="color:#2b91af">I1</span>::RefType&lt;&#39;_&gt;, i2: <span style="color:#2b91af">I2</span>::RefType&lt;&#39;_&gt;) -&gt; <span style="color:#2b91af">bool</span>
+</span></span><span style="display:flex;"><span><span style="color:#2b91af">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I1::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I2::RefType&lt;&#39;a&gt;: Into&lt;C::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; C::RefType&lt;&#39;a&gt;: PartialOrd,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i1 = I1::upcast_gat(i1);
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i2 = I2::upcast_gat(i2);
+</span></span><span style="display:flex;"><span>    i1.into().partial_cmp(&amp;i2.into()).unwrap() == Ordering::Greater
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样我们就实现了基于 GAT 手动协变的标量泛型函数。</p>
+<h3 id="实现真正的表达式向量化">实现真正的表达式向量化</h3>
+<p>有了 <code>BinaryExprFunc</code> 之后，标量函数的生命周期就全部抹掉了。直接用 <code>BinaryExprFunc</code> 来写 <code>BinaryExpression</code> 里面的 <code>func: F</code> 类型。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;I1, I2, O, F&gt; BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    O: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I1: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I2: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; &amp;&#39;a I1::ArrayType: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; &amp;&#39;a I2::ArrayType: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    F: <span style="color:#2b91af">BinaryExprFunc</span>&lt;I1, I2, O&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> new(func: <span style="color:#2b91af">F</span>) -&gt; <span style="color:#2b91af">Self</span> {
+</span></span><span style="display:flex;"><span>        Self {
+</span></span><span style="display:flex;"><span>            func,
+</span></span><span style="display:flex;"><span>            _phantom: <span style="color:#2b91af">PhantomData</span>,
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Evaluate the expression with the given array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> eval_batch(&amp;self, i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">ArrayImpl</span>) -&gt; Result&lt;ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> i1a: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I1</span>::ArrayType = i1.try_into()?;
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> i2a: <span style="color:#00f">&amp;</span><span style="color:#2b91af">I2</span>::ArrayType = i2.try_into()?;
+</span></span><span style="display:flex;"><span>        assert_eq!(i1.len(), i2.len(), <span style="color:#a31515">&#34;array length mismatch&#34;</span>);
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder = &lt;O::ArrayType <span style="color:#00f">as</span> Array&gt;::Builder::with_capacity(i1.len());
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1a.iter().zip(i2a.iter()) {
+</span></span><span style="display:flex;"><span>            <span style="color:#00f">match</span> (i1, i2) {
+</span></span><span style="display:flex;"><span>                (Some(i1), Some(i2)) =&gt; builder.push(Some(self.func.eval(i1, i2).as_scalar_ref())),
+</span></span><span style="display:flex;"><span>                _ =&gt; builder.push(None),
+</span></span><span style="display:flex;"><span>            }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        Ok(builder.finish().into())
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>性质都全了，这个程序一定能编译通过吧！然后我们又无情被编译器打脸。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0308]: mismatched types
+</span></span><span style="display:flex;"><span>  --&gt; archive/day6-hard/src/expr/vectorize.rs:72:74
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>72 |                 (Some(i1), Some(i2)) =&gt; builder.push(Some(self.func.eval(i1, i2).as_scalar_ref())),
+</span></span><span style="display:flex;"><span>   |                                                                          ^^ expected scalar::Scalar::RefType, found array::Array::RefItem
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected associated type `&lt;I1 as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;&lt;I1 as scalar::Scalar&gt;::ArrayType as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>error[E0308]: mismatched types
+</span></span><span style="display:flex;"><span>  --&gt; archive/day6-hard/src/expr/vectorize.rs:72:78
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>72 |                 (Some(i1), Some(i2)) =&gt; builder.push(Some(self.func.eval(i1, i2).as_scalar_ref())),
+</span></span><span style="display:flex;"><span>   |                                                                              ^^ expected scalar::Scalar::RefType, found array::Array::RefItem
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected associated type `&lt;I2 as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;&lt;I2 as scalar::Scalar&gt;::ArrayType as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>error[E0308]: mismatched types
+</span></span><span style="display:flex;"><span>  --&gt; archive/day6-hard/src/expr/vectorize.rs:72:59
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>72 |                 (Some(i1), Some(i2)) =&gt; builder.push(Some(self.func.eval(i1, i2).as_scalar_ref())),
+</span></span><span style="display:flex;"><span>   |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected array::Array::RefItem, found scalar::Scalar::RefType
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected associated type `&lt;&lt;O as scalar::Scalar&gt;::ArrayType as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;O as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>For more information about this error, try `rustc --explain E0308`.
+</span></span></code></pre></div><p>编译器一连报了三个错，我们来看看：</p>
+<p>前两个错大概是：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>   = note: expected associated type `&lt;I1 as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;&lt;I1 as scalar::Scalar&gt;::ArrayType as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span></code></pre></div><p>也就是编译器不能证明 <code>I1::ArrayType::RefItem</code> 就是 <code>I1::RefType</code>。第二个错同理。</p>
+<p>第三个错是：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>   = note: expected associated type `&lt;&lt;O as scalar::Scalar&gt;::ArrayType as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;O as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span></code></pre></div><p>编译器不能证明 <code>O::RefType</code> 就是 <code>O::ArrayType::RefItem</code>。和之前的两个错转换方向相反。</p>
+<p>这还不简单？我们之前已经做过无数次类似的类型体操了。可以用 HRTB 把 bound 写在 <code>BinaryExpression</code> 上。</p>
+<p>先正着写：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;I1, I2, O, F&gt; BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* ... */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I1::ArrayType: <span style="color:#2b91af">Array</span>&lt;RefItem&lt;&#39;a&gt; = I1::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I2::ArrayType: <span style="color:#2b91af">Array</span>&lt;RefItem&lt;&#39;a&gt; = I2::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; O::ArrayType: <span style="color:#2b91af">Array</span>&lt;RefItem&lt;&#39;a&gt; = O::RefType&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span></code></pre></div><p>编译失败，要在各种地方加 trait；再换个 trait 写：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;I1, I2, O, F&gt; BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* ... */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I1: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = &lt;I1::ArrayType <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; I2: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = &lt;I2::ArrayType <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; O: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = &lt;O::ArrayType <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span></code></pre></div><p>报错逐渐离谱：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0391]: cycle detected when computing the bounds for type parameter `I1`
+</span></span><span style="display:flex;"><span>  --&gt; archive/day6-hard/src/expr/vectorize.rs:52:39
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>52 |     for&lt;&#39;a&gt; I1: Scalar&lt;RefType&lt;&#39;a&gt; = &lt;I1::ArrayType as Array&gt;::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>   |                                       ^^^^^^^^^^^^^
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: ...which immediately requires computing the bounds for type parameter `I1` again
+</span></span><span style="display:flex;"><span>note: cycle used when computing explicit predicates of `expr::vectorize::&lt;impl at archive/day6-hard/src/expr/vectorize.rs:44:1: 81:2&gt;`
+</span></span><span style="display:flex;"><span>  --&gt; archive/day6-hard/src/expr/vectorize.rs:49:17
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>49 |     for&lt;&#39;a&gt; &amp;&#39;a I1::ArrayType: TryFrom&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>   |                 ^^^^^^^^^^^^^
+</span></span></code></pre></div><p>总之在这里写 HRBT 是写不出来的。那怎么办捏？</p>
+<p>就在几分钟前，我们通过 <code>upcast_gat</code> 实现了生命周期的协变。这里能不能也用类似的方法解决呢？</p>
+<p>拍了拍脑袋，直接给 <code>Scalar</code> 加一个 <code>Scalar::ArrayType::RefItem</code> 与 <code>Scalar::RefType</code> 之间互相转换的函数吧：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Scalar {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Cast `Scalar::RefType` to `Array::RefItem`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// This function will only be used in internal implementation of `BinaryExpression`, so we
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// don&#39;t give a meaningful name to this function.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">#[allow(clippy::needless_lifetimes)]</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> cast_s_to_a&lt;&#39;x&gt;(item: <span style="color:#2b91af">Self</span>::RefType&lt;&#39;x&gt;) -&gt; &lt;Self::ArrayType <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;x&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Cast `Array::RefItem` to `Scalar::RefType`
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// This function will only be used in internal implementation of `BinaryExpression`, so we
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// don&#39;t give a meaningful name to this function.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">#[allow(clippy::needless_lifetimes)]</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> cast_a_to_s&lt;&#39;x&gt;(item: &lt;Self::ArrayType <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;x&gt;) -&gt; <span style="color:#2b91af">Self</span>::RefType&lt;&#39;x&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><em>注：这里碰到了 clippy 的 bug，要我把 <code>'x</code> 这个 lifetime 去掉，但实际上是去不掉的。</em></p>
+<p>简单给每个 Scalar 类型都实现一下这两个函数，最后改一下 <code>eval_batch</code>：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1a.iter().zip(i2a.iter()) {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">match</span> (i1, i2) {
+</span></span><span style="display:flex;"><span>        (Some(i1), Some(i2)) =&gt; builder.push(Some(O::cast_s_to_a(
+</span></span><span style="display:flex;"><span>            self.func
+</span></span><span style="display:flex;"><span>                .eval(I1::cast_a_to_s(i1), I2::cast_a_to_s(i2))
+</span></span><span style="display:flex;"><span>                .as_scalar_ref(),
+</span></span><span style="display:flex;"><span>        ))),
+</span></span><span style="display:flex;"><span>        _ =&gt; builder.push(None),
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>我们用 <code>cast_a_to_s</code>, <code>cast_s_to_a</code> 这两个黑魔法打败了编译器。</p>
+<p>于是，编译通过，向量化也完成了！这个系列类型体操做法的好处是，开发者只要写一个裸的函数，直接就可以被向量化。</p>
+<h3 id="实现-boxedexpression">实现 BoxedExpression</h3>
+<p>生命周期都被抹掉以后，<code>BoxedExpression</code> 也更好实现了：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// A trait over all expressions -- unary, binary, etc.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Expression {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Evaluate an expression with run-time number of [`ArrayImpl`]s.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> eval_expr(&amp;self, data: <span style="color:#00f">&amp;</span>[&amp;ArrayImpl]) -&gt; Result&lt;ArrayImpl&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// All supported expression functions
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">enum</span> <span style="color:#2b91af">ExpressionFunc</span> {
+</span></span><span style="display:flex;"><span>    CmpLe,
+</span></span><span style="display:flex;"><span>    CmpGe,
+</span></span><span style="display:flex;"><span>    CmpEq,
+</span></span><span style="display:flex;"><span>    CmpNe,
+</span></span><span style="display:flex;"><span>    StrContains,
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// Build expression with runtime information.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> build_binary_expression(f: <span style="color:#2b91af">ExpressionFunc</span>) -&gt; Box&lt;<span style="color:#00f">dyn</span> Expression&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">use</span> ExpressionFunc::*;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">use</span> <span style="color:#00f">crate</span>::expr::cmp::*;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">use</span> <span style="color:#00f">crate</span>::expr::string::*;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">use</span> <span style="color:#00f">crate</span>::expr::vectorize::*;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">match</span> f {
+</span></span><span style="display:flex;"><span>        CmpLe =&gt; Box::new(BinaryExpression::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">bool</span>, _&gt;::new(
+</span></span><span style="display:flex;"><span>            cmp_le::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>&gt;,
+</span></span><span style="display:flex;"><span>        )),
+</span></span><span style="display:flex;"><span>        CmpGe =&gt; Box::new(BinaryExpression::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">bool</span>, _&gt;::new(
+</span></span><span style="display:flex;"><span>            cmp_ge::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>&gt;,
+</span></span><span style="display:flex;"><span>        )),
+</span></span><span style="display:flex;"><span>        CmpEq =&gt; Box::new(BinaryExpression::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">bool</span>, _&gt;::new(
+</span></span><span style="display:flex;"><span>            cmp_eq::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>&gt;,
+</span></span><span style="display:flex;"><span>        )),
+</span></span><span style="display:flex;"><span>        CmpNe =&gt; Box::new(BinaryExpression::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">bool</span>, _&gt;::new(
+</span></span><span style="display:flex;"><span>            cmp_ne::&lt;<span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i32</span>, <span style="color:#2b91af">i64</span>&gt;,
+</span></span><span style="display:flex;"><span>        )),
+</span></span><span style="display:flex;"><span>        StrContains =&gt; Box::new(BinaryExpression::&lt;String, String, <span style="color:#2b91af">bool</span>, _&gt;::new(
+</span></span><span style="display:flex;"><span>            str_contains,
+</span></span><span style="display:flex;"><span>        )),
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>我们可以把 <code>BinaryExpression</code> 做成 <code>Box&lt;dyn Expression&gt;</code>，之后就可以在函数里构建，然后到处传递了。再给 <code>BinaryExpression</code> 实现 <code>Expression</code> trait：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// [`Expression`] implementation for [`BinaryExpression`]
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span>&lt;I1, I2, O, F&gt; Expression <span style="color:#00f">for</span> BinaryExpression&lt;I1, I2, O, F&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    O: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I1: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    I2: <span style="color:#2b91af">Scalar</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; &amp;&#39;a I1::ArrayType: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; &amp;&#39;a I2::ArrayType: <span style="color:#2b91af">TryFrom</span>&lt;&amp;&#39;a ArrayImpl, Error = TypeMismatch&gt;,
+</span></span><span style="display:flex;"><span>    F: <span style="color:#2b91af">BinaryExprFunc</span>&lt;I1, I2, O&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> eval_expr(&amp;self, data: <span style="color:#00f">&amp;</span>[&amp;ArrayImpl]) -&gt; Result&lt;ArrayImpl&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">if</span> data.len() != 2 {
+</span></span><span style="display:flex;"><span>            <span style="color:#00f">return</span> Err(anyhow!(<span style="color:#a31515">&#34;Expect two inputs for BinaryExpression&#34;</span>));
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        self.eval_batch(data[0], data[1])
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>终于，我们得到了一个真正的表达式向量化框架：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">#[test]</span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> test_build_str_contains() {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> expr = build_binary_expression(ExpressionFunc::StrContains);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span> _ <span style="color:#00f">in</span> 0..10 {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">let</span> result = expr
+</span></span><span style="display:flex;"><span>            .eval_expr(&amp;[
+</span></span><span style="display:flex;"><span>                &amp;StringArray::from_slice(&amp;[Some(<span style="color:#a31515">&#34;000&#34;</span>), Some(<span style="color:#a31515">&#34;111&#34;</span>), None]).into(),
+</span></span><span style="display:flex;"><span>                &amp;StringArray::from_slice(&amp;[Some(<span style="color:#a31515">&#34;0&#34;</span>), Some(<span style="color:#a31515">&#34;0&#34;</span>), None]).into(),
+</span></span><span style="display:flex;"><span>            ])
+</span></span><span style="display:flex;"><span>            .unwrap();
+</span></span><span style="display:flex;"><span>        assert_eq!(result.get(0).unwrap(), ScalarRefImpl::Bool(<span style="color:#00f">true</span>));
+</span></span><span style="display:flex;"><span>        assert_eq!(result.get(1).unwrap(), ScalarRefImpl::Bool(<span style="color:#00f">false</span>));
+</span></span><span style="display:flex;"><span>        assert!(result.get(2).is_none());
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>Day 6 总算结束了！</p>
+<hr>
+<p>欢迎在这篇文章对应的 <a href="https://github.com/skyzh/skyzh.github.io/issues/9">Issue</a> 下使用 GitHub 账号评论、交流你的想法。</p>
+<p><em>《用 Rust 做类型体操 (下篇) 》已发布！如需了解，请至我的博客文章列表中找到下篇。</em></p>
+
+				
+			</div>
+
+			<div class="tags">
+				
+					
+						<ul class="flat">
+							
+							<li><a href="/tags/rust">Rust</a></li>
+							
+							<li><a href="/tags/%E6%95%B0%E6%8D%AE%E5%BA%93">数据库</a></li>
+							
+							<li><a href="/tags/%E6%89%A7%E8%A1%8C%E5%99%A8">执行器</a></li>
+							
+							<li><a href="/tags/%E7%B1%BB%E5%9E%8B">类型</a></li>
+							
+							<li><a href="/tags/gat">GAT</a></li>
+							
+						</ul>
+					
+				
+			</div></div>
+	</div>
+	<div class="footer wrapper">
+	<nav class="nav">
+		<div>2022  © Alex Chi |  <a href="https://github.com/knadh/hugo-ink">Ink</a> theme on <a href="https://gohugo.io">Hugo</a></div>
+	</nav>
+</div>
+
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'UA-52525161-8', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+<script>feather.replace()</script>
+</body>
+</html>

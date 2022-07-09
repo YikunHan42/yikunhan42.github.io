@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<meta http-equiv="X-UA-Compatible" content="IE=edge"><title>用 Rust 做类型体操 (上篇) - Alex Chi</title><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+	<link rel="manifest" href="/site.webmanifest">
+
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta itemprop="name" content="用 Rust 做类型体操 (上篇)">
+<meta itemprop="description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 0: 引入 通常来说，在 Rust 语言中可以使用 trait 来做泛型 (generics)。但由于语言的一些限制，开发者往往难以用编程语言表达自己所需的 trait。在这种背景下，开发者往往会诉诸其他工具。举个例子：
+// 正常来说，开发者可以用 trait 来定义共享行为，从而实现 generics pub fn speak(animal: impl Animal) { println!(&#34;Hi, I&#39;m {}&#34;, animal.identity()); } // 由于某些原因，开发者没法给 Animal 实现 `identity`。因此，只能通过类似 // macro 的工具来生成重复代码。 pub fn speak(animal: AnimalEnum) { generate_match_arms! { animal, identity_map } } // 由于某些原因，Rust 的 macro_rules 无法表达开发者所需的泛型，开发者 // 可能会选择 procedural macro 来从 AST-level 生成代码 #[generate_speak] pub fn speak(animal: AnimalEnum) { // 里面的内容会被过程宏替换掉 todo!"><meta itemprop="datePublished" content="2022-01-22T16:00:00+08:00" />
+<meta itemprop="dateModified" content="2022-01-22T16:00:00+08:00" />
+<meta itemprop="wordCount" content="2801">
+<meta itemprop="keywords" content="Rust,数据库,执行器,类型,GAT," /><meta property="og:title" content="用 Rust 做类型体操 (上篇)" />
+<meta property="og:description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 0: 引入 通常来说，在 Rust 语言中可以使用 trait 来做泛型 (generics)。但由于语言的一些限制，开发者往往难以用编程语言表达自己所需的 trait。在这种背景下，开发者往往会诉诸其他工具。举个例子：
+// 正常来说，开发者可以用 trait 来定义共享行为，从而实现 generics pub fn speak(animal: impl Animal) { println!(&#34;Hi, I&#39;m {}&#34;, animal.identity()); } // 由于某些原因，开发者没法给 Animal 实现 `identity`。因此，只能通过类似 // macro 的工具来生成重复代码。 pub fn speak(animal: AnimalEnum) { generate_match_arms! { animal, identity_map } } // 由于某些原因，Rust 的 macro_rules 无法表达开发者所需的泛型，开发者 // 可能会选择 procedural macro 来从 AST-level 生成代码 #[generate_speak] pub fn speak(animal: AnimalEnum) { // 里面的内容会被过程宏替换掉 todo!" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://www.skyzh.dev/posts/articles/2022-01-22-rust-type-exercise-in-database-executors/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2022-01-22T16:00:00+08:00" />
+<meta property="article:modified_time" content="2022-01-22T16:00:00+08:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="用 Rust 做类型体操 (上篇)"/>
+<meta name="twitter:description" content="TL;DR: 本人前两天刚写的 type-exercise-in-rust (GitHub) 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。
+Day 0: 引入 通常来说，在 Rust 语言中可以使用 trait 来做泛型 (generics)。但由于语言的一些限制，开发者往往难以用编程语言表达自己所需的 trait。在这种背景下，开发者往往会诉诸其他工具。举个例子：
+// 正常来说，开发者可以用 trait 来定义共享行为，从而实现 generics pub fn speak(animal: impl Animal) { println!(&#34;Hi, I&#39;m {}&#34;, animal.identity()); } // 由于某些原因，开发者没法给 Animal 实现 `identity`。因此，只能通过类似 // macro 的工具来生成重复代码。 pub fn speak(animal: AnimalEnum) { generate_match_arms! { animal, identity_map } } // 由于某些原因，Rust 的 macro_rules 无法表达开发者所需的泛型，开发者 // 可能会选择 procedural macro 来从 AST-level 生成代码 #[generate_speak] pub fn speak(animal: AnimalEnum) { // 里面的内容会被过程宏替换掉 todo!"/>
+<link href='https://fonts.googleapis.com/css?family=Playfair+Display:700' rel='stylesheet' type='text/css'>
+	<link rel="stylesheet" type="text/css" media="screen" href="https://www.skyzh.dev/css/normalize.css" />
+	<link rel="stylesheet" type="text/css" media="screen" href="https://www.skyzh.dev/css/main.css" />
+
+        <link id="dark-scheme" rel="stylesheet" type="text/css" href="https://www.skyzh.dev/css/dark.css" />
+
+	<script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+		<script src="https://www.skyzh.dev/js/main.js"></script>
+	
+</head>
+
+
+
+<body>
+	<div class="container wrapper">
+		<div class="header">
+	
+		<div class="avatar">
+			<a href="https://www.skyzh.dev/">
+				<img src="https://avatars.githubusercontent.com/u/4198311" alt="Alex Chi" />
+			</a>
+		</div>
+	
+	<h1 class="site-title"><a href="https://www.skyzh.dev/">Alex Chi</a></h1>
+	<div class="site-description"><p>Code for fun, Make things happen</p><nav class="nav social">
+			<ul class="flat"><li><a href="https://github.com/skyzh" title="GitHub"><i data-feather="github"></i></a></li></ul>
+		</nav>
+	</div>
+
+	<nav class="nav">
+		<ul class="flat">
+			
+		</ul>
+	</nav>
+</div>
+
+
+		<div class="post">
+			<div class="post-header">
+				
+					
+						<div class="meta">
+							<div class="date">
+								<span class="day">22</span>
+								<span class="rest">Jan 2022</span>
+							</div>
+						</div>
+					
+				
+				<div class="matter">
+					<h1 class="title">用 Rust 做类型体操 (上篇)</h1>
+					
+				</div>
+			</div>
+					
+			<div>
+				
+					<nav id="TableOfContents">
+  <ul>
+    <li><a href="#day-0-引入">Day 0: 引入</a>
+      <ul>
+        <li><a href="#设计目标">设计目标</a></li>
+      </ul>
+    </li>
+    <li><a href="#day-1-array-与-arraybuilder">Day 1: <code>Array</code> 与 <code>ArrayBuilder</code></a>
+      <ul>
+        <li><a href="#目标">目标</a></li>
+        <li><a href="#实现-primitivearray-与-stringarray">实现 <code>PrimitiveArray</code> 与 <code>StringArray</code></a></li>
+        <li><a href="#实现-array-trait">实现 <code>Array</code> trait</a></li>
+        <li><a href="#实现-arrayiterator">实现 <code>ArrayIterator</code></a></li>
+        <li><a href="#实现-arraybuilder-trait">实现 <code>ArrayBuilder</code> trait</a></li>
+      </ul>
+    </li>
+    <li><a href="#day-2-scalar-与-scalarref">Day 2: <code>Scalar</code> 与 <code>ScalarRef</code></a>
+      <ul>
+        <li><a href="#目标-1">目标</a></li>
+        <li><a href="#实现-scalar">实现 <code>Scalar</code></a></li>
+        <li><a href="#实现-scalarref">实现 <code>ScalarRef</code></a></li>
+        <li><a href="#用-hrtb-表达-gat-类型相同">用 HRTB 表达 GAT 类型相同</a></li>
+        <li><a href="#为-primitivearray-加上新的-trait-bound">为 PrimitiveArray 加上新的 trait bound</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+					<hr>
+				
+			</div>
+			<div class="markdown">
+				<p>TL;DR: 本人前两天刚写的 <a href="https://github.com/skyzh/type-exercise-in-rust">type-exercise-in-rust (GitHub)</a> 中已经包含了一整套数据库执行器的类型设计，本文将详细介绍整个设计过程中的思考过程和解决方案。</p>
+<h2 id="day-0-引入">Day 0: 引入</h2>
+<p>通常来说，在 Rust 语言中可以使用 trait 来做泛型 (generics)。但由于语言的一些限制，开发者往往难以用编程语言表达自己所需的 trait。在这种背景下，开发者往往会诉诸其他工具。举个例子：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#008000">// 正常来说，开发者可以用 trait 来定义共享行为，从而实现 generics
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> speak(animal: <span style="color:#2b91af">impl</span> Animal) {
+</span></span><span style="display:flex;"><span>  println!(<span style="color:#a31515">&#34;Hi, I&#39;m {}&#34;</span>, animal.identity());
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 由于某些原因，开发者没法给 Animal 实现 `identity`。因此，只能通过类似
+</span></span></span><span style="display:flex;"><span><span style="color:#008000">// macro 的工具来生成重复代码。
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> speak(animal: <span style="color:#2b91af">AnimalEnum</span>) {
+</span></span><span style="display:flex;"><span>  generate_match_arms! { animal, identity_map }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 由于某些原因，Rust 的 macro_rules 无法表达开发者所需的泛型，开发者
+</span></span></span><span style="display:flex;"><span><span style="color:#008000">// 可能会选择 procedural macro 来从 AST-level 生成代码
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">#[generate_speak]</span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> speak(animal: <span style="color:#2b91af">AnimalEnum</span>) {
+</span></span><span style="display:flex;"><span>  <span style="color:#008000">// 里面的内容会被过程宏替换掉
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>  todo!()
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 最终，开发者发现不管怎么样都没法使用 Rust 语言表达所需的泛型，选择使
+</span></span></span><span style="display:flex;"><span><span style="color:#008000">// 用外部工具生成代码。这种操作俗称摆烂。
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> generate_code() -&gt; Result&lt;()&gt; {
+</span></span><span style="display:flex;"><span>  std::fs::write(<span style="color:#a31515">&#34;animal.rs&#34;</span>, format!(<span style="color:#a31515">&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">  pub fn speak(animal: AnimalEnum) {{
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">    {generated_code}
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">  }}
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">  &#34;</span>, generated_code = generate_code_for_animal()))
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>从方法论的角度来讲，一旦开发者在某个需要使用泛型的地方使用了宏展开，调用它的代码就不可能再通过 trait-based generics 使用这段代码。从这个角度来说，越是“大道至简”的生成代码，越难维护。但反过来说，如果要完全实现 trait-based generics，往往要和编译器斗智斗勇，就算是通过编译也需要花掉大量的时间。</p>
+<p><img src="type-exercise-intro.png" alt="开发者快乐程度"></p>
+<p>取得可维护性和易用性的平衡是一件困难的事情。不过在数据库系统的场景里，我们更愿意做到“一劳永逸”——数据库执行器所支持的数据类型是有限的，这一块代码往往写完之后就不会有大的改动了。为了使用这一套系统的开发者写代码写得快乐，在执行器的数据类型里做一些“类型体操”是比较合适的事情。</p>
+<p>《用 Rust 做类型体操》系列以构造一个数据库执行器的数据类型框架为例，带开发者了解如何使用 Rust 语言的黑魔法，在 safe nightly Rust 中实现各种神奇的泛型操作，在编译期用最少的代码量生成尽可能多的调用组合，减少运行时开销。</p>
+<h3 id="设计目标">设计目标</h3>
+<p><img src="map-of-types.png" alt="数据类型关联图"></p>
+<p>如上图所示，《用 Rust 做类型体操》系列围绕 <code>Array</code> 构造了一整套 trait 系统，从而帮助开发者更好地在这套系统上实现想要的功能。举一些例子：</p>
+<p><strong>统一的零开销接口</strong></p>
+<p>在我们的实现中，<code>Array</code> 是一个存储数据集合的数据结构。<code>Array</code> 可能实现了一些比较特殊的内存布局，导致无法取得所有权类型的引用。举例：</p>
+<ul>
+<li>从 <code>Vec&lt;String&gt;</code> 中，可以零拷贝地取得 <code>&amp;String</code>.</li>
+<li>如果使用类似 Apache Arrow 的方式存储 <code>StringArray</code> (offset + flat array), 则只能取得 <code>&amp;str</code>。</li>
+</ul>
+<p>我们实现的这套 <code>Array</code> 抽象可以很好地表示 Array 存储的所有权类型 <code>String</code> 和 Array 可以获得的引用类型 <code>&amp;str</code> 之间的关系。这一套接口既可以给定长类型用，也可以给变长类型用。</p>
+<p><strong>表达式向量化</strong></p>
+<p>开发者只需要实现处理单个数据的 SQL 函数，我们的框架可以直接将它展开为向量化后的函数。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">ExprStrContains</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> BinaryExprFunc&lt;StringArray, StringArray, BoolArray&gt; <span style="color:#00f">for</span> ExprStrContains {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> eval(&amp;self, i1: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>, i2: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>) -&gt; <span style="color:#2b91af">bool</span> {
+</span></span><span style="display:flex;"><span>        i1.contains(i2)
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">#[test]</span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> test_str_contains() {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// 编译期将 StrContains 函数向量化
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>    <span style="color:#00f">let</span> expr = build_binary_expression(
+</span></span><span style="display:flex;"><span>        ExpressionFunc::StrContains,
+</span></span><span style="display:flex;"><span>        DataType::Varchar,
+</span></span><span style="display:flex;"><span>        DataType::Char { width: 10 },
+</span></span><span style="display:flex;"><span>    );
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i1: <span style="color:#2b91af">ArrayImpl</span> = StringArray::from_slice(&amp;[Some(<span style="color:#a31515">&#34;000&#34;</span>), Some(<span style="color:#a31515">&#34;111&#34;</span>), None]).into();
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> i2: <span style="color:#2b91af">ArrayImpl</span> = StringArray::from_slice(&amp;[Some(<span style="color:#a31515">&#34;0&#34;</span>), Some(<span style="color:#a31515">&#34;0&#34;</span>), None]).into();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// 之后调用表达式直接可以传入抹掉具体类型的 `ArrayImpl`。
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>    <span style="color:#00f">let</span> result = expr.eval_expr(&amp;[&amp;i1, &amp;i2]).unwrap();
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p><strong>编译期代码展开</strong></p>
+<p>在 OLAP 数据库系统中，用户可能会比较不同类型的数据（比如 i16 与 i64 比较，i32 和 f64 比较）。我们不可能为每一种比较都单独实现一套函数。本系列做的类型体操可以很方便地在编译期展开不同类型的比较操作。举个例子：</p>
+<p>我们在代码里通过 macro 描述可以做比较的类型，以及比较时需要做的 cast：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>macro_rules! for_all_cmp_combinations {
+</span></span><span style="display:flex;"><span>    (<span style="color:#00f">$macro</span>:<span style="color:#2b91af">tt</span> <span style="color:#00f">$(,</span> <span style="color:#00f">$x</span>:<span style="color:#2b91af">tt</span>)*) =&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">$macro</span>! {
+</span></span><span style="display:flex;"><span>            [<span style="color:#00f">$($x</span>),*],
+</span></span><span style="display:flex;"><span>            <span style="color:#008000">// comparison across integer types
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>            { int16, int32, int32 },
+</span></span><span style="display:flex;"><span>            { int32, int16, int32 },
+</span></span><span style="display:flex;"><span>            { int16, int64, int64 },
+</span></span><span style="display:flex;"><span>            { int32, int64, int64 },
+</span></span><span style="display:flex;"><span>            { int64, int16, int64 },
+</span></span><span style="display:flex;"><span>            { int64, int32, int64 },
+</span></span><span style="display:flex;"><span>            <span style="color:#008000">// comparison across float types
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>            { float32, float64, float64 },
+</span></span><span style="display:flex;"><span>            { float64, float32, float64 },
+</span></span><span style="display:flex;"><span>            <span style="color:#008000">// ...
+</span></span></span></code></pre></div><p>构建表达式时，可以直接在编译时一套代码展开成几十种不同的函数：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">fn</span> build_binary_expression(
+</span></span><span style="display:flex;"><span>    f: <span style="color:#2b91af">ExpressionFunc</span>,
+</span></span><span style="display:flex;"><span>    i1: <span style="color:#2b91af">DataType</span>,
+</span></span><span style="display:flex;"><span>    i2: <span style="color:#2b91af">DataType</span>,
+</span></span><span style="display:flex;"><span>) -&gt; Box&lt;<span style="color:#00f">dyn</span> Expression&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">match</span> f {
+</span></span><span style="display:flex;"><span>        CmpLe =&gt; for_all_cmp_combinations! { impl_cmp_expression_of, i1, i2, ExprCmpLe },
+</span></span><span style="display:flex;"><span>        <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>您可以在 <a href="https://github.com/skyzh/type-exercise-in-rust">type-exercise-in-rust</a> 中围观使用整个系统的实现。</p>
+<h2 id="day-1-array-与-arraybuilder">Day 1: <code>Array</code> 与 <code>ArrayBuilder</code></h2>
+<p><img src="type-exercise-rust-part-1.png" alt="Day 1 题图"></p>
+<p>如果您想直接看最终实现，可以直接跳转到 <a href="https://github.com/skyzh/type-exercise-in-rust/tree/master/archive/day1">Day 1 对应的源代码</a>.</p>
+<h3 id="目标">目标</h3>
+<p>数据库表达式向量化执行的过程写成伪代码大概是这样：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary(i1: <span style="color:#2b91af">InputArray</span>, i2: <span style="color:#2b91af">InputArray</span>) -&gt; <span style="color:#2b91af">OutputArray</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder = OutputArray::Builder::new();
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1.iter().zip_eq(i2.iter()) {
+</span></span><span style="display:flex;"><span>      builder.push(sql_func(i1, i2));
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    builder.finish()
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>注意 <code>OutputArray::Builder::new()</code>：如果需要实现类似于上面代码的泛型 <code>eval_bianry</code>，我们的类型框架就要支持从 <code>Array</code> 推导出 <code>ArrayBuilder</code> 的类型。</p>
+<p>因此，本文就介绍如何实现 <code>Array</code> 和 <code>ArrayBuilder</code> 这一对 trait，从而写出 <code>eval_binary</code> 函数体的前两行。涉及到的知识点有：</p>
+<ul>
+<li>Associated Type</li>
+<li>Generic Associated Type</li>
+</ul>
+<h3 id="实现-primitivearray-与-stringarray">实现 <code>PrimitiveArray</code> 与 <code>StringArray</code></h3>
+<p>在这个系列中，我们会实现一套类似于 Apache Arrow 内存布局的数组结构。Array 是 <code>Option&lt;T&gt;</code> 的集合。存储定长类型的 Array 叫 <code>PrimitiveArray</code>。这种数据如果用 <code>Vec&lt;Option&lt;T&gt;&gt;</code> 存储，每个 <code>Option&lt;T&gt;</code> 所需要的内存是 <code>mem::size_of::&lt;T&gt;()</code> 加上 <code>Option</code> 一个 bit 的开销。这个 bit 由于内存对齐的原因，往往会和 <code>T</code> 一样大。举例：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>assert_eq!(std::mem::size_of::&lt;<span style="color:#2b91af">u64</span>&gt;(), 8);
+</span></span><span style="display:flex;"><span>assert_eq!(std::mem::size_of::&lt;Option&lt;<span style="color:#2b91af">u64</span>&gt;&gt;(), 16);
+</span></span></code></pre></div><p>诸如 Apache Arrow 的存储可以大大优化 bitmap 所需要的空间。<code>PrimitiveArray</code> 使用一个 bitmap 来标识某个位置的元素是 <code>None</code> 还是有东西，用 <code>Vec&lt;T&gt;</code> 存储每一个位置的值，把 bitmap 和具体数据分开，以减少内存对齐的开销。</p>
+<p><code>PrimitiveArray</code> 对于所有基本类型的实现几乎是一致的，所以我们可以直接用泛型来实现它。<code>PrimitiveType</code> 是我们自己定义的一个 trait。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">PrimitiveArray</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The actual data of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    data: Vec&lt;T&gt;,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The null bitmap of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    bitmap: <span style="color:#2b91af">BitVec</span>,
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;T&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">if</span> self.bitmap[idx] {
+</span></span><span style="display:flex;"><span>            Some(self.data[idx])
+</span></span><span style="display:flex;"><span>        } <span style="color:#00f">else</span> {
+</span></span><span style="display:flex;"><span>            None
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> len(&amp;self) -&gt; <span style="color:#2b91af">usize</span> {
+</span></span><span style="display:flex;"><span>        self.data.len()
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>Apache Arrow 对于 <code>StringArray</code> 的存储也有一定的优化。数据库系统往往会顺序扫描一个 <code>Array</code> 里面所有的 <code>String</code>。如果使用 <code>Vec&lt;Option&lt;String&gt;&gt;</code> 来存储字符串的集合，有两个问题：</p>
+<ul>
+<li>写入 <code>Vec&lt;Option&lt;String&gt;&gt;</code> 必须要创建一个 <code>String</code> 对象，会有内存分配的开销。在数据库的场景中，开发者往往希望能直接把网络中接收到的数据、或存储里读出来的磁盘页 <code>Vec&lt;u8&gt;</code> 零开销地转换成一个 <code>StringArray</code>；而不是把 <code>Vec&lt;u8&gt;</code> 拷一遍转换成很多很多 <code>String</code>。</li>
+<li>连续读取一个 <code>Vec&lt;Option&lt;String&gt;&gt;</code> 里面的 <code>String</code> 可能对缓存不友好。<code>String</code> 是一个指针，散落在内存里的各个地方，遍历 <code>Vec&lt;Option&lt;String&gt;&gt;</code> 的过程反映到内存读取上可能是东读一块，西读一块，随机读。</li>
+</ul>
+<p>综上所述，<code>StringArray</code> 应该把 <code>String</code> 紧凑地存在一起。在 Apache Arrow 中，<code>StringArray</code> 分为三个部分：一个平摊的字符数组，一个记录 offset 的数组，以及一个 bitmap。比如，<code>StringArray</code> 中包含 <code>233</code>, <code>abc</code>, null 三个数据，它会以这种方式存在内存里：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>data:    233abc
+</span></span><span style="display:flex;"><span>         ^  ^  ^
+</span></span><span style="display:flex;"><span>         |  |  |--|
+</span></span><span style="display:flex;"><span>offsets: 0, 3, 6, 6
+</span></span><span style="display:flex;"><span>bitmap: true, true, false
+</span></span></code></pre></div><p>这样一来，整个 <code>StringArray</code> 所对应的数据在内存里就连续了。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">StringArray</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The flattened data of string.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    data: Vec&lt;<span style="color:#2b91af">u8</span>&gt;,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Offsets of each string in the data flat array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    offsets: Vec&lt;<span style="color:#2b91af">usize</span>&gt;,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The null bitmap of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    bitmap: <span style="color:#2b91af">BitVec</span>,
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;&amp;<span style="color:#2b91af">str</span>&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">if</span> self.bitmap[idx] {
+</span></span><span style="display:flex;"><span>            <span style="color:#00f">let</span> range = self.offsets[idx]..self.offsets[idx + 1];
+</span></span><span style="display:flex;"><span>            Some(<span style="color:#00f">unsafe</span> { std::<span style="color:#2b91af">str</span>::from_utf8_unchecked(&amp;self.data[range]) })
+</span></span><span style="display:flex;"><span>        } <span style="color:#00f">else</span> {
+</span></span><span style="display:flex;"><span>            None
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span></code></pre></div><p>开发者需要使用 <code>PrimitiveArrayBuilder</code> 构造 <code>PrimitiveArray</code>，使用 <code>StringArrayBuilder</code> 构造 <code>StringArray</code>。构造的过程和读取差不多，在这里就不赘述了，有兴趣可以直接看代码或者自己实现。</p>
+<h3 id="实现-array-trait">实现 <code>Array</code> trait</h3>
+<p><code>Array</code> trait 囊括了整个系统中所有的 Array &ndash; <code>PrimitiveArray</code>, <code>StringArray</code>。先试着写一下它的声明：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// [`Array`] is a collection of data of the same type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The reference item of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Retrieve a reference to value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;Self::RefItem&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Number of items of array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> len(&amp;self) -&gt; <span style="color:#2b91af">usize</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Indicates whether this array is empty
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> is_empty(&amp;self) -&gt; <span style="color:#2b91af">bool</span> {
+</span></span><span style="display:flex;"><span>        self.len() == 0
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>然后尝试给 <code>PrimitiveArray</code> 和 <code>StringArray</code> 实现这个 trait。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span> = T;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span> = &amp;<span style="color:#2b91af">str</span>;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>接下来就出现了一些大问题：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0106]: missing lifetime specifier
+</span></span><span style="display:flex;"><span>  --&gt; archive/day1/src/array/string_array.rs:29:20
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>29 |     type RefItem = &amp;str;
+</span></span><span style="display:flex;"><span>   |                    ^ expected named lifetime parameter
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>help: consider introducing a named lifetime parameter
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>29 |     type RefItem&lt;&#39;a&gt; = &amp;&#39;a str;
+</span></span><span style="display:flex;"><span>   |                 ++++    ++
+</span></span></code></pre></div><p><code>&amp;str</code> 写在关联类型中需要一个生命周期！照着编译器的提示加上生命周期。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;&#39;a&gt; = &amp;&#39;a <span style="color:#2b91af">str</span>;
+</span></span></code></pre></div><div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0658]: generic associated types are unstable
+</span></span><span style="display:flex;"><span>  --&gt; archive/day1/src/array/string_array.rs:29:5
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>29 |     type RefItem&lt;&#39;a&gt; = &amp;&#39;a str;
+</span></span><span style="display:flex;"><span>   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: see issue #44265 &lt;https://github.com/rust-lang/rust/issues/44265&gt; for more information
+</span></span><span style="display:flex;"><span>   = help: add `#![feature(generic_associated_types)]` to the crate attributes to enable
+</span></span></code></pre></div><p>又一次无情被编译器打脸，编译器说要开启 &ldquo;generic associated types&rdquo; (GAT)，这是个啥？</p>
+<p>trait 里面的 associated type 的声明，通常来说不能再有第二层 generic parameter。举例：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The reference item of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;T&gt;;
+</span></span></code></pre></div><p>这个 <code>&lt;T&gt;</code> 就叫 GAT，它既可以是一个具体的类型，也可以是我们这边需要的 lifetime。所以，开启 GAT 之后，就可以在这里表达 <code>Array</code> 对应的 <code>RefItem</code> 可以是 <code>'a</code> 生命周期的东西了。更新一下 <code>Array</code> 的定义：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// [`Array`] is a collection of data of the same type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Type of the item that can be retrieved from the [`Array`]. For example, we can get a `i32`
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// from [`Int32Array`], while [`StringArray`] produces a `&amp;str`. As we need a lifetime that is
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// the same as `self` for `&amp;str`, we use GAT here.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;&#39;a&gt;: Clone + Copy + std::fmt::Debug;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Retrieve a reference to value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;Self::RefItem&lt;&#39;_&gt;&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// For [`StringArray`], we can only get an `&amp;str` out of it with zero overhead.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;&#39;a&gt; = &amp;&#39;a <span style="color:#2b91af">str</span>;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// For `PrimitiveType`, we can always get the value from the array with little overhead.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// Therefore, we do not use the `&#39;a` lifetime here, and simply copy the value to the user when
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// calling `get`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;&#39;a&gt; = T;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>这样，我们就可以在 <code>get</code> 函数的签名里用 <code>-&gt; Option&lt;Self::RefItem&lt;'_&gt;&gt;</code> 来表达：<code>Array</code> 里面可以拿到和 <code>self</code> 生命周期相同的引用了。</p>
+<p>有的朋友可能要问了，为啥这里要用 GAT，没有别的解法吗？</p>
+<p>当然有！</p>
+<h4 id="解法-1修改-primitivearray-的实现使用-sized-bound">解法 1：修改 PrimitiveArray 的实现，使用 <code>?Sized</code> bound</h4>
+<p>现在的实现中，我们希望 <code>PrimitiveArray</code> 返回 <code>Option&lt;i32&gt;</code> 而非 <code>Option&lt;&amp;i32&gt;</code>。有的 Array 返回的东西是有生命周期的，有的没有。第一种解法就是把它们统一，不论是 <code>StringArray</code> 还是 <code>PrimitiveArray</code> 都返回 <code>Option&lt;&amp;T&gt;</code>。</p>
+<p>这样一来，我们就可以这样修改 <code>Array</code> 的定义：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>: ?Sized;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Retrieve a reference to value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;&amp;Self::RefItem&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span> = <span style="color:#2b91af">str</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span> = T;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样就可以在 trait 里面表达“<code>get</code> 返回的 <code>Self::RefItem</code> 拥有 <code>Self</code> 的生命周期”了。</p>
+<p>这个做法现在在 <a href="https://github.com/risinglightdb/risinglight/blob/main/src/array/mod.rs">RisingLight</a> 里面用到，相对来讲还是比较好用的。不过考虑到未来还有可能存类似于 <code>Json</code> 的不定长数据 (TiKV Coprocessor 里面就有 <a href="https://github.com/tikv/tikv/blob/master/components/tidb_query_datatype/src/codec/mysql/json/mod.rs">Json 类型</a>)，但 <code>Json</code> 可能并没有 <code>str</code> 这样的 <code>!Sized</code> type 来表示不定长的数据：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">Json</span> {
+</span></span><span style="display:flex;"><span>  ty: <span style="color:#2b91af">JsonType</span>, <span style="color:#008000">// Number, String, Array, ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>  data: Vec&lt;<span style="color:#2b91af">u8</span>&gt;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">JsonRef</span>&lt;&#39;a&gt; {
+</span></span><span style="display:flex;"><span>  ty: <span style="color:#2b91af">JsonType</span>, <span style="color:#008000">// Number, String, Array, ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>  data: <span style="color:#00f">&amp;</span>&#39;a [<span style="color:#2b91af">u8</span>]
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>在这个场景下，就没有办法使用 <code>?Sized</code> bound 绕过 GAT 的问题了。</p>
+<h4 id="解法-2给-array-带上生命周期">解法 2：给 <code>Array</code> 带上生命周期。</h4>
+<p>我们刚刚碰到的根本问题是：<code>Array</code> trait 里面没有一个生命周期，但 <code>get</code> 返回的东西需要一个生命周期。</p>
+<p>我们完全可以把 <code>Array</code> 实现在所有 Array 的引用上，而非 Array 本身。举例：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> ArrayRef&lt;&#39;a&gt;: Send {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>: &#39;a;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Retrieve a reference to value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> get(&amp;self, idx: <span style="color:#2b91af">usize</span>) -&gt; Option&lt;Self::RefItem&gt;;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> &lt;&#39;a&gt; ArrayRef&lt;&#39;a&gt; <span style="color:#00f">for</span> &amp;&#39;a StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span> = &amp;&#39;a <span style="color:#2b91af">str</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样也可以完美解决这个问题。不过这样一来，generics function 都没法实现在有 ownership 的 Array 上面了，感觉有些奇怪，所以这个系列没这么做。</p>
+<h3 id="实现-arrayiterator">实现 <code>ArrayIterator</code></h3>
+<p>有了 GAT 之后，实现 <code>ArrayIterator</code> 也非常简单了。现在我们对不同类型的 Array 都统一了 <code>Array</code> trait，因此所有 <code>Array</code> 可以用同一套 <code>Iterator</code> 实现。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// An iterator that iterators on any [`Array`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">struct</span> <span style="color:#2b91af">ArrayIterator</span>&lt;&#39;a, A: <span style="color:#2b91af">Array</span>&gt; {
+</span></span><span style="display:flex;"><span>    array: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">A</span>,
+</span></span><span style="display:flex;"><span>    pos: <span style="color:#2b91af">usize</span>,
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;&#39;a, A: <span style="color:#2b91af">Array</span>&gt; Iterator <span style="color:#00f">for</span> ArrayIterator&lt;&#39;a, A&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Item</span> = Option&lt;A::RefItem&lt;&#39;a&gt;&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> next(&amp;<span style="color:#00f">mut</span> self) -&gt; Option&lt;Self::Item&gt; {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">if</span> self.pos &gt;= self.array.len() {
+</span></span><span style="display:flex;"><span>            None
+</span></span><span style="display:flex;"><span>        } <span style="color:#00f">else</span> {
+</span></span><span style="display:flex;"><span>            <span style="color:#00f">let</span> item = self.array.get(self.pos);
+</span></span><span style="display:flex;"><span>            self.pos += 1;
+</span></span><span style="display:flex;"><span>            Some(item)
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;&#39;a, A: <span style="color:#2b91af">Array</span>&gt; ArrayIterator&lt;&#39;a, A&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Create an [`ArrayIterator`] from [`Array`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">pub</span> <span style="color:#00f">fn</span> new(array: <span style="color:#00f">&amp;</span>&#39;a <span style="color:#2b91af">A</span>) -&gt; <span style="color:#2b91af">Self</span> {
+</span></span><span style="display:flex;"><span>        Self { array, pos: 0 }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> iter(&amp;self) -&gt; <span style="color:#2b91af">ArrayIterator</span>&lt;Self&gt; {
+</span></span><span style="display:flex;"><span>        ArrayIterator::new(self)
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> iter(&amp;self) -&gt; <span style="color:#2b91af">ArrayIterator</span>&lt;Self&gt; {
+</span></span><span style="display:flex;"><span>        ArrayIterator::new(self)
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h3 id="实现-arraybuilder-trait">实现 <code>ArrayBuilder</code> trait</h3>
+<p>我们给 <code>Array</code> 加上 <code>Builder</code> 这个 associated type，然后修改各个实现：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// [`ArrayBuilder`] builds an [`Array`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> ArrayBuilder {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`Array`] of this [`ArrayBuilder`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// Here we use associated type to constraint the [`Array`] type of this builder, so that
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// `Self::Array::Builder == Self`. This property is very useful when constructing generic
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#a31515">/// functions, and may help a lot when implementing expressions.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Array</span>: <span style="color:#2b91af">Array</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Create a new builder with `capacity`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> with_capacity(capacity: <span style="color:#2b91af">usize</span>) -&gt; <span style="color:#2b91af">Self</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Append a value to builder.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> push(&amp;<span style="color:#00f">mut</span> self, value: Option&lt;&lt;Self::Array <span style="color:#00f">as</span> Array&gt;::RefItem&lt;&#39;_&gt;&gt;);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Finish build and return a new array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> finish(self) -&gt; <span style="color:#2b91af">Self</span>::Array;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`ArrayBuilder`] of this [`Array`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Builder</span>: <span style="color:#2b91af">ArrayBuilder</span>;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T: <span style="color:#2b91af">PrimitiveType</span>&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt; {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Builder</span> = PrimitiveArrayBuilder&lt;T&gt;;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">impl</span> Array <span style="color:#00f">for</span> StringArray {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Builder</span> = StringArrayBuilder;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>于是非常轻松地通过了编译，成功近在眼前，回过来实现一下本文刚开始想做的事情，除了中间那个 <code>.push</code>：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;I: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#2b91af">I</span>, i2: <span style="color:#2b91af">I</span>) -&gt; <span style="color:#2b91af">O</span> {
+</span></span><span style="display:flex;"><span>    assert_eq!(i1.len(), i2.len(), <span style="color:#a31515">&#34;size mismatch&#34;</span>);
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder = O::Builder::with_capacity(i1.len());
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1.iter().zip(i2.iter()) {
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">//   builder.push(sql_func(i1, i2));
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>    }
+</span></span><span style="display:flex;"><span>    builder.finish()
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译器无情打脸：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-mysql" data-lang="mysql"><span style="display:flex;"><span>error[E0308]: mismatched types
+</span></span><span style="display:flex;"><span>  --&gt; archive/day1/src/array.rs:79:9
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>73 |     fn eval_binary&lt;I: Array, O: Array&gt;(i1: I, i2: I) -&gt; O <span style="">{</span>
+</span></span><span style="display:flex;"><span>   |                              - this type parameter      - expected `O` because of <span style="color:#00f">return</span> type
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>79 |         builder.finish()
+</span></span><span style="display:flex;"><span>   |         ^^^^^^^^^^^^^^^^ expected type parameter `O`, found associated type
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected type parameter `O`
+</span></span><span style="display:flex;"><span>             found associated type `&lt;&lt;O <span style="color:#00f">as</span> array::Array&gt;::Builder <span style="color:#00f">as</span> array::ArrayBuilder&gt;::Array`
+</span></span><span style="display:flex;"><span>   = note: you might be missing a type parameter <span style="color:#00f">or</span> trait bound
+</span></span></code></pre></div><p>这是为什么捏？</p>
+<p>仔细看一看编译器的提示信息，发现这么一句：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-mysql" data-lang="mysql"><span style="display:flex;"><span>   = note: expected type parameter `O`
+</span></span><span style="display:flex;"><span>             found associated type `&lt;&lt;O <span style="color:#00f">as</span> array::Array&gt;::Builder <span style="color:#00f">as</span> array::ArrayBuilder&gt;::Array`
+</span></span></code></pre></div><p>编译器在这个泛型函数里没法证明 <code>O::Builder::finish</code> 的返回值就是 <code>O</code>。</p>
+<p>所以我们要修改一下 trait 的声明，把 <code>Array</code> 和 <code>ArrayBuilder</code> 里面的 associated type 关联起来，让编译器知道：<code>Array</code> 的 <code>Builder</code> 的 <code>Array</code> 还是我自己。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Builder</span>: <span style="color:#2b91af">ArrayBuilder</span>&lt;Array = Self&gt;;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ..
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> ArrayBuilder {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">Array</span>: <span style="color:#2b91af">Array</span>&lt;Builder = Self&gt;;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p>于是，编译通过，day 1 结束了！</p>
+<h2 id="day-2-scalar-与-scalarref">Day 2: <code>Scalar</code> 与 <code>ScalarRef</code></h2>
+<p><img src="type-exercise-rust-part-2.png" alt="Day 2 题图"></p>
+<p>如果您想直接看最终实现，可以直接跳转到 <a href="https://github.com/skyzh/type-exercise-in-rust/tree/master/archive/day2">Day 2 对应的源代码</a>.</p>
+<h3 id="目标-1">目标</h3>
+<p>回到之前向量化执行的代码：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;I: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#2b91af">I</span>, i2: <span style="color:#2b91af">I</span>) -&gt; <span style="color:#2b91af">O</span> {
+</span></span><span style="display:flex;"><span>    assert_eq!(i1.len(), i2.len(), <span style="color:#a31515">&#34;size mismatch&#34;</span>);
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder = O::Builder::with_capacity(i1.len());
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1.iter().zip(i2.iter()) {
+</span></span><span style="display:flex;"><span>       builder.push(sql_func(i1, i2));
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    builder.finish()
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>思考一下 <code>sql_func</code> 的函数签名应该是什么样？我们可以从 primitive type 和 string 两方面去考虑。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#008000">// 两数相加
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">fn</span> sql_add(a: <span style="color:#2b91af">i32</span>, b: <span style="color:#2b91af">i32</span>) -&gt; <span style="color:#2b91af">i32</span> { a + b }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#008000">// 字符串拼接
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span><span style="color:#00f">fn</span> concat(a: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>, b: <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span>) -&gt; String { a.to_string() + b }
+</span></span></code></pre></div><p>我们会发现一件神奇的事情：<code>sql_func</code> 通常来说会接收两个引用，然后产生一个有所有权的类型，比如 <code>String</code>。但是，<code>builder.push</code> 接收的是一个引用类型 <code>&amp;str</code>。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span>builder.push(sql_func(i1, i2).xxx() <span style="color:#008000">/* do some cast? */</span>);
+</span></span></code></pre></div><p>怎么在泛型函数里面转换这两个类型呢？这就需要我们引入新的 trait 来解决这个问题。</p>
+<h3 id="实现-scalar">实现 <code>Scalar</code></h3>
+<p>有了上次实现 <code>Array</code> 和 <code>ArrayBuilder</code> 的经验，我们可以用 associated type 来关联 <code>Array</code> 和 <code>Scalar</code> 两个类型。注意写 <code>ArrayType</code> 的 trait bound 的时候要指明“Scalar 的 Array 的 OwnedItem 是我自己”。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// An owned single value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">///  
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// For example, `i32`, `String` both implements [`Scalar`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Scalar: <span style="color:#2b91af">std</span>::fmt::Debug + Clone + Send + Sync + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`Array`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span>: <span style="color:#2b91af">Array</span>&lt;OwnedItem = Self&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The owned item of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">OwnedItem</span>: <span style="color:#2b91af">Scalar</span>&lt;ArrayType = Self&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>之后给各个类型都 impl <code>Scalar</code>，就没什么问题了。</p>
+<h3 id="实现-scalarref">实现 <code>ScalarRef</code></h3>
+<p><code>ScalarRef</code> 表示一个 <code>Scalar</code> 对应的某个生命周期的引用类型。举例：</p>
+<ul>
+<li><code>i32</code> 是 <code>Scalar</code>, 也是 <code>ScalarRef</code>.</li>
+<li><code>String</code> 是 <code>Scalar</code>, <code>&amp;'a str</code> 是 <code>ScalarRef&lt;'a&gt;</code>.</li>
+</ul>
+<p>我们先实现 <code>ScalarRef</code>，然后把 <code>Array</code>, <code>Scalar</code>, <code>ScalarRef</code> 三者关联起来。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// A borrowed value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">///
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515">/// For example, `i32`, `&amp;str` both implements [`ScalarRef`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> ScalarRef&lt;&#39;a&gt;: <span style="color:#2b91af">std</span>::fmt::Debug + Clone + Copy + Send + &#39;a {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`Array`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span>: <span style="color:#2b91af">Array</span>&lt;RefItem&lt;&#39;a&gt; = Self&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`Scalar`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ScalarType</span>: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = Self&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Convert the reference into an owned value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> to_owned_scalar(&amp;self) -&gt; <span style="color:#2b91af">Self</span>::ScalarType;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Scalar: <span style="color:#2b91af">std</span>::fmt::Debug + Clone + Send + Sync + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`Array`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span>: <span style="color:#2b91af">Array</span>&lt;OwnedItem = Self&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The corresponding [`ScalarRef`] type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefType</span>&lt;&#39;a&gt;: <span style="color:#2b91af">ScalarRef</span>&lt;&#39;a, ScalarType = Self, ArrayType = Self::ArrayType&gt;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>        Self: &#39;a;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// Get a reference of the current value.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">fn</span> as_scalar_ref(&amp;self) -&gt; <span style="color:#2b91af">Self</span>::RefType&lt;&#39;_&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// [`Array`] is a collection of data of the same type.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static {
+</span></span><span style="display:flex;"><span>    <span style="color:#a31515">/// The owned item of this array.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span>    <span style="color:#00f">type</span> <span style="color:#2b91af">OwnedItem</span>: <span style="color:#2b91af">Scalar</span>&lt;ArrayType = Self&gt;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefItem</span>&lt;&#39;a&gt;: <span style="color:#2b91af">ScalarRef</span>&lt;&#39;a, ScalarType = Self::OwnedItem, ArrayType = Self&gt;;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>接着对各个类型都实现 <code>ScalarRef</code>，即可通过 <code>Scalar::as_scalar_ref</code> 将一个 OwnedType 转换为 RefType。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#a31515">/// Implement [`Scalar`] for `i32`. Note that `i32` is both [`Scalar`] and [`ScalarRef`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span> Scalar <span style="color:#00f">for</span> <span style="color:#2b91af">i32</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span> = I32Array;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefType</span>&lt;&#39;a&gt; = <span style="color:#2b91af">i32</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> as_scalar_ref(&amp;self) -&gt; <span style="color:#2b91af">i32</span> {
+</span></span><span style="display:flex;"><span>        *self
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// Implement [`ScalarRef`] for `i32`. Note that `i32` is both [`Scalar`] and [`ScalarRef`].
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span>&lt;&#39;a&gt; ScalarRef&lt;&#39;a&gt; <span style="color:#00f">for</span> <span style="color:#2b91af">i32</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span> = I32Array;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ScalarType</span> = <span style="color:#2b91af">i32</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> to_owned_scalar(&amp;self) -&gt; <span style="color:#2b91af">i32</span> {
+</span></span><span style="display:flex;"><span>        *self
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// Implement [`Scalar`] for `String`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span> Scalar <span style="color:#00f">for</span> String {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span> = StringArray;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">RefType</span>&lt;&#39;a&gt; = &amp;&#39;a <span style="color:#2b91af">str</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> as_scalar_ref(&amp;self) -&gt; <span style="color:#00f">&amp;</span><span style="color:#2b91af">str</span> {
+</span></span><span style="display:flex;"><span>        self.as_str()
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a31515">/// Implement [`ScalarRef`] for `&amp;str`.
+</span></span></span><span style="display:flex;"><span><span style="color:#a31515"></span><span style="color:#00f">impl</span>&lt;&#39;a&gt; ScalarRef&lt;&#39;a&gt; <span style="color:#00f">for</span> &amp;&#39;a <span style="color:#2b91af">str</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ArrayType</span> = StringArray;
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">type</span> <span style="color:#2b91af">ScalarType</span> = String;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">fn</span> to_owned_scalar(&amp;self) -&gt; String {
+</span></span><span style="display:flex;"><span>        self.to_string()
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h3 id="用-hrtb-表达-gat-类型相同">用 HRTB 表达 GAT 类型相同</h3>
+<p>一切都非常地顺利，于是我们来试着编译一下向量化函数：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">fn</span> sql_func&lt;&#39;a, I: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#2b91af">I</span>::RefItem&lt;&#39;a&gt;, i2: <span style="color:#2b91af">I</span>::RefItem&lt;&#39;a&gt;) -&gt; <span style="color:#2b91af">O</span>::OwnedItem {
+</span></span><span style="display:flex;"><span>    todo!()
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#00f">fn</span> eval_binary&lt;I: <span style="color:#2b91af">Array</span>, O: <span style="color:#2b91af">Array</span>&gt;(i1: <span style="color:#2b91af">I</span>, i2: <span style="color:#2b91af">I</span>) -&gt; <span style="color:#2b91af">O</span> {
+</span></span><span style="display:flex;"><span>    assert_eq!(i1.len(), i2.len(), <span style="color:#a31515">&#34;size mismatch&#34;</span>);
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">let</span> <span style="color:#00f">mut</span> builder = O::Builder::with_capacity(i1.len());
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span> (i1, i2) <span style="color:#00f">in</span> i1.iter().zip(i2.iter()) {
+</span></span><span style="display:flex;"><span>        <span style="color:#00f">match</span> (i1, i2) {
+</span></span><span style="display:flex;"><span>            (Some(i1), Some(i2)) =&gt; {
+</span></span><span style="display:flex;"><span>                builder.push(Some(sql_func::&lt;I, O&gt;(i1, i2).as_scalar_ref()))
+</span></span><span style="display:flex;"><span>            }
+</span></span><span style="display:flex;"><span>            _ =&gt; builder.push(None),
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    builder.finish()
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>编译器又一次无情打脸：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0308]: mismatched types
+</span></span><span style="display:flex;"><span>  --&gt; archive/day2/src/array.rs:85:39
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>85 |                     builder.push(Some(sql_func::&lt;I, O&gt;(i1, i2).as_scalar_ref()))
+</span></span><span style="display:flex;"><span>   |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected array::Array::RefItem, found scalar::Scalar::RefType
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected associated type `&lt;O as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;&lt;O as array::Array&gt;::OwnedItem as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span></code></pre></div><p>这是怎么回事捏？为什么编译器说 <code>Array::RefItem</code> 和 <code>Scalar::RefType</code> 不是一个类型呢？</p>
+<p>回顾之前我们写的所有 trait bound：</p>
+<p>对于 <code>ScalarRef</code>，我们提供的类型信息是：</p>
+<ul>
+<li><code>type ArrayType: Array&lt;RefItem&lt;'a&gt; = Self&gt;;</code>
+<ul>
+<li>ScalarRef 的 Array 的 RefItem 是我自己。</li>
+</ul>
+</li>
+<li><code>type ScalarType: Scalar&lt;RefType&lt;'a&gt; = Self&gt;;</code>
+<ul>
+<li>ScalarRef 的 Scalar 是我自己。</li>
+</ul>
+</li>
+</ul>
+<p>对于 <code>Scalar</code>，我们提供的类型信息是：</p>
+<ul>
+<li><code>type ArrayType: Array&lt;OwnedItem = Self&gt;;</code>
+<ul>
+<li>Scalar 的 Array 的 OwnedItem 是我自己。</li>
+</ul>
+</li>
+<li><code>type RefType&lt;'a&gt;: ScalarRef&lt;'a, ScalarType = Self, ArrayType = Self::ArrayType&gt;</code>
+<ul>
+<li>Scalar 的 RefType 的 ScalarType 是我自己</li>
+<li>Scalar 的 RefType 的 ArrayType 是我的 ArrayType</li>
+</ul>
+</li>
+</ul>
+<p>对于 <code>Array</code>, 我们提供的类型信息是：</p>
+<ul>
+<li><code>type OwnedItem: Scalar&lt;ArrayType = Self&gt;;</code>
+<ul>
+<li>Array 的 OwnedItem 的 Array 是我自己。</li>
+</ul>
+</li>
+<li><code>type RefItem&lt;'a&gt;: ScalarRef&lt;'a, ScalarType = Self::OwnedItem, ArrayType = Self&gt;;</code>
+<ul>
+<li>Array 的 RefItem 的 ScalarType 是我的 OwnedItem，Array 的 RefItem 的 ArrayType 是我自己。</li>
+</ul>
+</li>
+</ul>
+<p>这么看了一圈，唯独缺了编译器提示的这一条信息：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>note: expected associated type `&lt;O as array::Array&gt;::RefItem&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>              found associated type `&lt;&lt;O as array::Array&gt;::OwnedItem as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span></code></pre></div><p>我们没有证明 Array 的 RefItem 都是 Array 的 OwnedItem 的 RefType！</p>
+<p><img src="type-exercise-rust-part-2-2.png" alt="没有证明的 bound"></p>
+<p>这个 trait bound 应该怎么写在 Array 上呢？</p>
+<ul>
+<li><code>RefItem&lt;'a&gt;</code>, <code>RefType&lt;'a&gt;</code> 是一个 GAT</li>
+<li><code>Array::RefItem&lt;'a&gt; == Array::OwnedItem::RefType&lt;'a&gt;</code> 要成立</li>
+<li>Array 自己没有生命周期，这个 <code>'a</code> 从哪里来？</li>
+</ul>
+<p>经过一番思考，<code>Array::RefItem&lt;'a&gt; == Array::OwnedItem::RefType&lt;'a&gt;</code> 这个性质应该<strong>对任意生命周期都成立</strong>。因此，我们可以用 <a href="https://doc.rust-lang.org/nomicon/hrtb.html">HRTB</a> Higher-Rank Trait Bounds 来写。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">pub</span> <span style="color:#00f">trait</span> Array: Send + Sync + Sized + &#39;static
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; Self::OwnedItem: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = Self::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">/* ... */</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>这样就可以表达两个 GAT 之间的关系了。</p>
+<h3 id="为-primitivearray-加上新的-trait-bound">为 PrimitiveArray 加上新的 trait bound</h3>
+<p>试着编译一下代码，又被编译器无情打脸：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0271]: type mismatch resolving `&lt;T as scalar::Scalar&gt;::ArrayType == PrimitiveArray&lt;T&gt;`
+</span></span><span style="display:flex;"><span>  --&gt; archive/day2/src/array/primitive_array.rs:46:20
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>46 |     type Builder = PrimitiveArrayBuilder&lt;T&gt;;
+</span></span><span style="display:flex;"><span>   |                    ^^^^^^^^^^^^^^^^^^^^^^^^ expected struct `PrimitiveArray`, found associated type
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note:       expected struct `PrimitiveArray&lt;T&gt;`
+</span></span><span style="display:flex;"><span>           found associated type `&lt;T as scalar::Scalar&gt;::ArrayType`
+</span></span><span style="display:flex;"><span>   = help: consider constraining the associated type `&lt;T as scalar::Scalar&gt;::ArrayType` to `PrimitiveArray&lt;T&gt;`
+</span></span><span style="display:flex;"><span>   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+</span></span></code></pre></div><p><em>注：<code>Scalar</code> 相关的编译错误其实之前就应该出现，不过为了文章的编排顺序，我们在这里和 HRTB bound 一起讲。</em></p>
+<p>这个错误其实很好理解：在我们的系统里，可以有 <code>PrimitiveArray&lt;u8&gt;</code>, 可以有 <code>PrimitiveArray&lt;i64&gt;</code>，但只有后者是实现了 Array 的，前者没有。所以，在 <code>impl PrimitiveArray&lt;T&gt;</code> 的时候，也要对相关的 trait 做一些限制，只对我们支持的类型 impl。因此，要加上 <code>Scalar</code> 和 <code>ScalarRef</code> 的两个 bound。由于 <code>Array</code> 本身没有生命周期，因此要用 HRTB bound 表达当前 Array 产生的所有 <code>ScalarRef</code> 和 <code>Scalar</code>, <code>Array</code> 都有对应关系。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">PrimitiveType</span>,
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">Scalar</span>&lt;ArrayType = Self&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; T: <span style="color:#2b91af">ScalarRef</span>&lt;&#39;a, ScalarType = T, ArrayType = Self&gt;,
+</span></span></code></pre></div><p>加完之后，编译器又报了一个错：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>error[E0271]: type mismatch resolving `for&lt;&#39;a&gt; &lt;T as scalar::Scalar&gt;::RefType&lt;&#39;a&gt; == T`
+</span></span><span style="display:flex;"><span>  --&gt; archive/day2/src/array/primitive_array.rs:51:22
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>42 | impl&lt;T&gt; Array for PrimitiveArray&lt;T&gt;
+</span></span><span style="display:flex;"><span>   |      - this type parameter
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>51 |     type OwnedItem = T;
+</span></span><span style="display:flex;"><span>   |                      ^ expected type parameter `T`, found associated type
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>   = note: expected type parameter `T`
+</span></span><span style="display:flex;"><span>             found associated type `&lt;T as scalar::Scalar&gt;::RefType&lt;&#39;_&gt;`
+</span></span><span style="display:flex;"><span>note: required by a bound in `array::Array::OwnedItem`
+</span></span><span style="display:flex;"><span>  --&gt; archive/day2/src/array.rs:23:37
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>23 |     for&lt;&#39;a&gt; Self::OwnedItem: Scalar&lt;RefType&lt;&#39;a&gt; = Self::RefItem&lt;&#39;a&gt;&gt;,
+</span></span><span style="display:flex;"><span>   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `array::Array::OwnedItem`
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>31 |     type OwnedItem: Scalar&lt;ArrayType = Self&gt;;
+</span></span><span style="display:flex;"><span>   |          --------- required by a bound in this
+</span></span><span style="display:flex;"><span>help: consider further restricting type parameter `T`
+</span></span><span style="display:flex;"><span>   |
+</span></span><span style="display:flex;"><span>46 |     for&lt;&#39;a&gt; T: ScalarRef&lt;&#39;a, ScalarType = T, ArrayType = Self&gt;, T: scalar::Scalar&lt;RefType&lt;&#39;_&gt; = T&gt;
+</span></span><span style="display:flex;"><span>   |                                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+</span></span></code></pre></div><p>这该怎么理解捏？</p>
+<p>用 <code>i32</code> 来举例，编译器推导不出来  <code>i32::RefType == i32 (OwnedType)</code>。这个报错很明显和我们预想实现的不太一样：RefType 怎么可能等于 OwnedType？感觉像是报错没报对地方。</p>
+<p>稍作思考，为什么这个地方 <code>OwnedType</code> 和 <code>RefType</code> 关联起来了？因为 <code>i32</code> 既是 <code>ScalarRef</code>, 也是 <code>Scalar</code>。逆向思维一下，这个报错可能实际上是由：</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-plain" data-lang="plain"><span style="display:flex;"><span>&lt;i32 as Scalar&gt;::RefType ?= i32 (Array::RefItem)`
+</span></span></code></pre></div><p>引起的。</p>
+<p>因此，我们只需要把 PrimitiveArray 的 <code>for&lt;'a&gt; T: Scalar&lt;RefType&lt;'a&gt; = T&gt;</code> 的 bound 就上就行了，以满足 Array 的 <code>for&lt;'a&gt; Self::OwnedItem: Scalar&lt;RefType&lt;'a&gt; = Self::RefItem&lt;'a&gt;&gt;</code>。</p>
+<div class="highlight"><pre tabindex="0" style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-rust" data-lang="rust"><span style="display:flex;"><span><span style="color:#00f">impl</span>&lt;T&gt; Array <span style="color:#00f">for</span> PrimitiveArray&lt;T&gt;
+</span></span><span style="display:flex;"><span><span style="color:#00f">where</span>
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">PrimitiveType</span>,
+</span></span><span style="display:flex;"><span>    T: <span style="color:#2b91af">Scalar</span>&lt;ArrayType = Self&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; T: <span style="color:#2b91af">ScalarRef</span>&lt;&#39;a, ScalarType = T, ArrayType = Self&gt;,
+</span></span><span style="display:flex;"><span>    <span style="color:#00f">for</span>&lt;&#39;a&gt; T: <span style="color:#2b91af">Scalar</span>&lt;RefType&lt;&#39;a&gt; = T&gt;,
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#008000">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#008000"></span>}
+</span></span></code></pre></div><p><code>PrimitiveArray</code> 和 <code>PrimitiveArrayBuilder</code> 有了这四个 bound 之后，编译就能通过了。day 2 顺利结束！</p>
+<hr>
+<p>欢迎在这篇文章对应的 <a href="https://github.com/skyzh/skyzh.github.io/issues/9">Issue</a> 下使用 GitHub 账号评论、交流你的想法。</p>
+<p><em>《用 Rust 做类型体操 (中篇) 》已发布！如需了解，请至我的博客文章列表中找到中篇。</em></p>
+
+				
+			</div>
+
+			<div class="tags">
+				
+					
+						<ul class="flat">
+							
+							<li><a href="/tags/rust">Rust</a></li>
+							
+							<li><a href="/tags/%E6%95%B0%E6%8D%AE%E5%BA%93">数据库</a></li>
+							
+							<li><a href="/tags/%E6%89%A7%E8%A1%8C%E5%99%A8">执行器</a></li>
+							
+							<li><a href="/tags/%E7%B1%BB%E5%9E%8B">类型</a></li>
+							
+							<li><a href="/tags/gat">GAT</a></li>
+							
+						</ul>
+					
+				
+			</div></div>
+	</div>
+	<div class="footer wrapper">
+	<nav class="nav">
+		<div>2022  © Alex Chi |  <a href="https://github.com/knadh/hugo-ink">Ink</a> theme on <a href="https://gohugo.io">Hugo</a></div>
+	</nav>
+</div>
+
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'UA-52525161-8', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+<script>feather.replace()</script>
+</body>
+</html>
